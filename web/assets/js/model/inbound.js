@@ -317,7 +317,7 @@ TcpStreamSettings.TcpResponse = class extends XrayCommonClass {
 
 class KcpStreamSettings extends XrayCommonClass {
     constructor(
-        mtu = 1350,
+        mtu = 1250,
         tti = 50,
         uplinkCapacity = 5,
         downlinkCapacity = 20,
@@ -729,8 +729,8 @@ class RealityStreamSettings extends XrayCommonClass {
     constructor(
         show = false,
         xver = 0,
-        target = 'google.com:443',
-        serverNames = 'google.com,www.google.com',
+        target = '',
+        serverNames = '',
         privateKey = '',
         minClientVer = '',
         maxClientVer = '',
@@ -740,6 +740,14 @@ class RealityStreamSettings extends XrayCommonClass {
         settings = new RealityStreamSettings.Settings()
     ) {
         super();
+        // If target/serverNames are not provided, use random values
+        if (!target && !serverNames) {
+            const randomTarget = typeof getRandomRealityTarget !== 'undefined'
+                ? getRandomRealityTarget()
+                : { target: 'www.apple.com:443', sni: 'www.apple.com,apple.com' };
+            target = randomTarget.target;
+            serverNames = randomTarget.sni;
+        }
         this.show = show;
         this.xver = xver;
         this.target = target;
@@ -849,6 +857,7 @@ class SockoptStreamSettings extends XrayCommonClass {
         V6Only = false,
         tcpWindowClamp = 600,
         interfaceName = "",
+        trustedXForwardedFor = [],
     ) {
         super();
         this.acceptProxyProtocol = acceptProxyProtocol;
@@ -867,6 +876,7 @@ class SockoptStreamSettings extends XrayCommonClass {
         this.V6Only = V6Only;
         this.tcpWindowClamp = tcpWindowClamp;
         this.interfaceName = interfaceName;
+        this.trustedXForwardedFor = trustedXForwardedFor;
     }
 
     static fromJson(json = {}) {
@@ -888,11 +898,12 @@ class SockoptStreamSettings extends XrayCommonClass {
             json.V6Only,
             json.tcpWindowClamp,
             json.interface,
+            json.trustedXForwardedFor || [],
         );
     }
 
     toJson() {
-        return {
+        const result = {
             acceptProxyProtocol: this.acceptProxyProtocol,
             tcpFastOpen: this.tcpFastOpen,
             mark: this.mark,
@@ -910,6 +921,10 @@ class SockoptStreamSettings extends XrayCommonClass {
             tcpWindowClamp: this.tcpWindowClamp,
             interface: this.interfaceName,
         };
+        if (this.trustedXForwardedFor && this.trustedXForwardedFor.length > 0) {
+            result.trustedXForwardedFor = this.trustedXForwardedFor;
+        }
+        return result;
     }
 }
 
@@ -1204,6 +1219,14 @@ class Inbound extends XrayCommonClass {
             return this.protocol === Protocols.VLESS;
         }
         return false;
+    }
+
+    // Vision seed applies only when vision flow is selected
+    canEnableVisionSeed() {
+        if (!this.canEnableTlsFlow()) return false;
+        const clients = this.settings?.vlesses;
+        if (!Array.isArray(clients)) return false;
+        return clients.some(c => c?.flow === TLS_FLOW_CONTROL.VISION || c?.flow === TLS_FLOW_CONTROL.VISION_UDP443);
     }
 
     canEnableReality() {
@@ -1862,6 +1885,7 @@ Inbound.VLESSSettings = class extends Inbound.Settings {
         encryption = "none",
         fallbacks = [],
         selectedAuth = undefined,
+        testseed = [900, 500, 900, 256],
     ) {
         super(protocol);
         this.vlesses = vlesses;
@@ -1869,6 +1893,7 @@ Inbound.VLESSSettings = class extends Inbound.Settings {
         this.encryption = encryption;
         this.fallbacks = fallbacks;
         this.selectedAuth = selectedAuth;
+        this.testseed = testseed;
     }
 
     addFallback() {
@@ -1880,13 +1905,20 @@ Inbound.VLESSSettings = class extends Inbound.Settings {
     }
 
     static fromJson(json = {}) {
+        // Ensure testseed is always initialized as an array
+        let testseed = [900, 500, 900, 256];
+        if (json.testseed && Array.isArray(json.testseed) && json.testseed.length >= 4) {
+            testseed = json.testseed;
+        }
+
         const obj = new Inbound.VLESSSettings(
             Protocols.VLESS,
             (json.clients || []).map(client => Inbound.VLESSSettings.VLESS.fromJson(client)),
             json.decryption,
             json.encryption,
             Inbound.VLESSSettings.Fallback.fromJson(json.fallbacks || []),
-            json.selectedAuth
+            json.selectedAuth,
+            testseed
         );
         return obj;
     }
@@ -1910,6 +1942,10 @@ Inbound.VLESSSettings = class extends Inbound.Settings {
         }
         if (this.selectedAuth) {
             json.selectedAuth = this.selectedAuth;
+        }
+
+        if (this.testseed && this.testseed.length >= 4) {
+            json.testseed = this.testseed;
         }
 
         return json;
@@ -2470,7 +2506,7 @@ Inbound.HttpSettings.HttpAccount = class extends XrayCommonClass {
 Inbound.WireguardSettings = class extends XrayCommonClass {
     constructor(
         protocol,
-        mtu = 1420,
+        mtu = 1250,
         secretKey = Wireguard.generateKeypair().privateKey,
         peers = [new Inbound.WireguardSettings.Peer()],
         noKernelTun = false
