@@ -147,7 +147,7 @@ setup_ssl_certificate() {
     echo -e "${green}Issuing SSL certificate for ${domain}...${plain}"
     echo -e "${yellow}Note: Port 80 must be open and accessible from the internet${plain}"
     
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force >/dev/null 2>&1
     ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport 80 --force
     
     if [ $? -ne 0 ]; then
@@ -272,7 +272,7 @@ setup_ip_certificate() {
 
     # Issue certificate with shortlived profile
     echo -e "${green}Issuing IP certificate for ${ipv4}...${plain}"
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force >/dev/null 2>&1
     
     ~/.acme.sh/acme.sh --issue \
         ${domain_args} \
@@ -414,7 +414,7 @@ ssl_cert_issue() {
     systemctl stop x-ui 2>/dev/null || rc-service x-ui stop 2>/dev/null
 
     # issue the certificate
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
     ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --force
     if [ $? -ne 0 ]; then
         echo -e "${red}Issuing certificate failed, please check logs.${plain}"
@@ -521,12 +521,13 @@ prompt_and_setup_ssl() {
     echo -e "${yellow}Choose SSL certificate setup method:${plain}"
     echo -e "${green}1.${plain} Let's Encrypt for Domain (90-day validity, auto-renews)"
     echo -e "${green}2.${plain} Let's Encrypt for IP Address (6-day validity, auto-renews)"
-    echo -e "${blue}Note:${plain} Both options require port 80 open. IP certs use shortlived profile."
+    echo -e "${green}3.${plain} Custom SSL Certificate (Path to existing files)"
+    echo -e "${blue}Note:${plain} Options 1 & 2 require port 80 open. Option 3 requires manual paths."
     read -rp "Choose an option (default 2 for IP): " ssl_choice
     ssl_choice="${ssl_choice// /}"  # Trim whitespace
     
-    # Default to 2 (IP cert) if not 1
-    if [[ "$ssl_choice" != "1" ]]; then
+    # Default to 2 (IP cert) if input is empty or invalid (not 1 or 3)
+    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "3" ]]; then
         ssl_choice="2"
     fi
 
@@ -569,7 +570,66 @@ prompt_and_setup_ssl() {
             echo -e "${red}✗ IP certificate setup failed. Please check port 80 is open.${plain}"
             SSL_HOST="${server_ip}"
         fi
+        ;;
+    3)
+        # User chose Custom Paths (User Provided) option
+        echo -e "${green}Using custom existing certificate...${plain}"
+        local custom_cert=""
+        local custom_key=""
+        local custom_domain=""
+
+        # 3.1 Request Domain to compose Panel URL later
+        read -rp "Please enter domain name certificate issued for: " custom_domain
+        custom_domain="${custom_domain// /}" # Убираем пробелы
+
+        # 3.2 Loop for Certificate Path
+        while true; do
+            read -rp "Input certificate path (keywords: .crt / fullchain): " custom_cert
+            # Strip quotes if present
+            custom_cert=$(echo "$custom_cert" | tr -d '"' | tr -d "'")
+
+            if [[ -f "$custom_cert" && -r "$custom_cert" && -s "$custom_cert" ]]; then
+                break
+            elif [[ ! -f "$custom_cert" ]]; then
+                echo -e "${red}Error: File does not exist! Try again.${plain}"
+            elif [[ ! -r "$custom_cert" ]]; then
+                echo -e "${red}Error: File exists but is not readable (check permissions)!${plain}"
+            else
+                echo -e "${red}Error: File is empty!${plain}"
+            fi
+        done
+
+        # 3.3 Loop for Private Key Path
+        while true; do
+            read -rp "Input private key path (keywords: .key / privatekey): " custom_key
+            # Strip quotes if present
+            custom_key=$(echo "$custom_key" | tr -d '"' | tr -d "'")
+
+            if [[ -f "$custom_key" && -r "$custom_key" && -s "$custom_key" ]]; then
+                break
+            elif [[ ! -f "$custom_key" ]]; then
+                echo -e "${red}Error: File does not exist! Try again.${plain}"
+            elif [[ ! -r "$custom_key" ]]; then
+                echo -e "${red}Error: File exists but is not readable (check permissions)!${plain}"
+            else
+                echo -e "${red}Error: File is empty!${plain}"
+            fi
+        done
+
+        # 3.4 Apply Settings via x-ui binary
+        ${xui_folder}/x-ui cert -webCert "$custom_cert" -webCertKey "$custom_key" >/dev/null 2>&1
         
+        # Set SSL_HOST for composing Panel URL
+        if [[ -n "$custom_domain" ]]; then
+            SSL_HOST="$custom_domain"
+        else
+            SSL_HOST="${server_ip}"
+        fi
+
+        echo -e "${green}✓ Custom certificate paths applied.${plain}"
+        echo -e "${yellow}Note: You are responsible for renewing these files externally.${plain}"
+
+        systemctl restart x-ui >/dev/null 2>&1 || rc-service x-ui restart >/dev/null 2>&1
         ;;
     *)
         echo -e "${red}Invalid option. Skipping SSL setup.${plain}"
@@ -594,8 +654,11 @@ config_after_install() {
     )
     local server_ip=""
     for ip_address in "${URL_lists[@]}"; do
-        server_ip=$(curl -s --max-time 3 "${ip_address}" 2>/dev/null | tr -d '[:space:]')
-        if [[ -n "${server_ip}" ]]; then
+        local response=$(curl -s -w "\n%{http_code}" --max-time 3 "${ip_address}" 2>/dev/null)
+        local http_code=$(echo "$response" | tail -n1)
+        local ip_result=$(echo "$response" | head -n-1 | tr -d '[:space:]')
+        if [[ "${http_code}" == "200" && -n "${ip_result}" ]]; then
+            server_ip="${ip_result}"
             break
         fi
     done
@@ -818,6 +881,15 @@ install_x-ui() {
                         fi
                     fi
                 ;;
+                arch | manjaro | parch)
+                    if [ -f "x-ui.service.arch" ]; then
+                        echo -e "${green}Found x-ui.service.arch in extracted files, installing...${plain}"
+                        cp -f x-ui.service.arch ${xui_service}/x-ui.service >/dev/null 2>&1
+                        if [[ $? -eq 0 ]]; then
+                            service_installed=true
+                        fi
+                    fi
+                ;;
                 *)
                     if [ -f "x-ui.service.rhel" ]; then
                         echo -e "${green}Found x-ui.service.rhel in extracted files, installing...${plain}"
@@ -836,6 +908,9 @@ install_x-ui() {
             case "${release}" in
                 ubuntu | debian | armbian)
                     curl -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.service.debian >/dev/null 2>&1
+                ;;
+                arch | manjaro | parch)
+                    curl -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.service.arch >/dev/null 2>&1
                 ;;
                 *)
                     curl -4fLRo ${xui_service}/x-ui.service https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.service.rhel >/dev/null 2>&1

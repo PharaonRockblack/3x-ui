@@ -374,6 +374,16 @@
 "subJsonEnable" = "JSON サブスクリプションのエンドポイントを個別に有効/無効にする。"
 "subTitle" = "サブスクリプションタイトル"
 "subTitleDesc" = "VPNクライアントに表示されるタイトル"
+"subSupportUrl" = "サポートURL"
+"subSupportUrlDesc" = "VPNクライアントに表示されるテクニカルサポートへのリンク"
+"subProfileUrl" = "プロフィールURL"
+"subProfileUrlDesc" = "VPNクライアントに表示されるWebサイトへのリンク"
+"subAnnounce" = "お知らせ"
+"subAnnounceDesc" = "VPNクライアントに表示されるお知らせのテキスト"
+"subEnableRouting" = "ルーティングを有効化"
+"subEnableRoutingDesc" = "VPNクライアントでルーティングを有効にするためのグローバル設定。(Happのみ)"
+"subRoutingRules" = "ルーティングルール"
+"subRoutingRulesDesc" = "VPNクライアントのグローバルルーティングルール。(Happのみ)"
 "subListen" = "監視IP"
 "subListenDesc" = "サブスクリプションサービスが監視するIPアドレス（空白にするとすべてのIPを監視）"
 "subPort" = "監視ポート"
@@ -450,6 +460,8 @@
 "FreedomStrategyDesc" = "Freedomプロトコル内のネットワークの出力戦略を設定する"
 "RoutingStrategy" = "ルーティングドメイン戦略設定"
 "RoutingStrategyDesc" = "DNS解決の全体的なルーティング戦略を設定する"
+"outboundTestUrl" = "アウトバウンドテスト URL"
+"outboundTestUrlDesc" = "アウトバウンド接続テストに使用する URL。既定値"
 "Torrent" = "BitTorrent プロトコルをブロック"
 "Inbounds" = "インバウンドルール"
 "InboundsDesc" = "特定のクライアントからのトラフィックを受け入れる"
@@ -513,6 +525,12 @@
 "accountInfo" = "アカウント情報"
 "outboundStatus" = "アウトバウンドステータス"
 "sendThrough" = "送信経路"
+"test" = "テスト"
+"testResult" = "テスト結果"
+"testing" = "接続をテスト中..."
+"testSuccess" = "テスト成功"
+"testFailed" = "テスト失敗"
+"testError" = "アウトバウンドのテストに失敗しました"
 
 [pages.xray.balancer]
 "addBalancer" = "負荷分散追加"
@@ -530,6 +548,12 @@
 "endpoint" = "エンドポイント"
 "psk" = "共有キー"
 "domainStrategy" = "ドメイン戦略"
+
+[pages.xray.tun]
+"nameDesc" = "TUN インターフェースの名前。デフォルトは 'xray0' です"
+"mtuDesc" = "最大伝送単位。データパケットの最大サイズ。デフォルトは 1500 です"
+"userLevel" = "ユーザーレベル"
+"userLevelDesc" = "このインバウンドを通じて確立されたすべての接続は、このユーザーレベルを使用します。デフォルトは 0 です"
 
 [pages.xray.dns]
 "enable" = "DNSを有効にする"

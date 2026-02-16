@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -271,41 +272,78 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 	return nil
 }
 
+// createRobustFastHTTPClient creates a fasthttp.Client with proper connection handling
+func (t *Tgbot) createRobustFastHTTPClient(proxyUrl string) *fasthttp.Client {
+	client := &fasthttp.Client{
+		// Connection timeouts
+		ReadTimeout:                   30 * time.Second,
+		WriteTimeout:                  30 * time.Second,
+		MaxIdleConnDuration:           60 * time.Second,
+		MaxConnDuration:               0, // unlimited, but controlled by MaxIdleConnDuration
+		MaxIdemponentCallAttempts:     3,
+		ReadBufferSize:                4096,
+		WriteBufferSize:               4096,
+		MaxConnsPerHost:               100,
+		MaxConnWaitTimeout:            10 * time.Second,
+		DisableHeaderNamesNormalizing: false,
+		DisablePathNormalizing:        false,
+		// Retry on connection errors
+		RetryIf: func(request *fasthttp.Request) bool {
+			// Retry on connection errors for GET requests
+			return string(request.Header.Method()) == "GET" || string(request.Header.Method()) == "POST"
+		},
+	}
+
+	// Set proxy if provided
+	if proxyUrl != "" {
+		client.Dial = fasthttpproxy.FasthttpSocksDialer(proxyUrl)
+	}
+
+	return client
+}
+
 // NewBot creates a new Telegram bot instance with optional proxy and API server settings.
 func (t *Tgbot) NewBot(token string, proxyUrl string, apiServerUrl string) (*telego.Bot, error) {
-	if proxyUrl == "" && apiServerUrl == "" {
-		return telego.NewBot(token)
-	}
-
+	// Validate proxy URL if provided
 	if proxyUrl != "" {
 		if !strings.HasPrefix(proxyUrl, "socks5://") {
-			logger.Warning("Invalid socks5 URL, using default")
-			return telego.NewBot(token)
+			logger.Warning("Invalid socks5 URL, ignoring proxy")
+			proxyUrl = "" // Clear invalid proxy
+		} else {
+			_, err := url.Parse(proxyUrl)
+			if err != nil {
+				logger.Warningf("Can't parse proxy URL, ignoring proxy: %v", err)
+				proxyUrl = ""
+			}
 		}
+	}
 
-		_, err := url.Parse(proxyUrl)
-		if err != nil {
-			logger.Warningf("Can't parse proxy URL, using default instance for tgbot: %v", err)
-			return telego.NewBot(token)
+	// Validate API server URL if provided
+	if apiServerUrl != "" {
+		if !strings.HasPrefix(apiServerUrl, "http") {
+			logger.Warning("Invalid http(s) URL for API server, using default")
+			apiServerUrl = ""
+		} else {
+			_, err := url.Parse(apiServerUrl)
+			if err != nil {
+				logger.Warningf("Can't parse API server URL, using default: %v", err)
+				apiServerUrl = ""
+			}
 		}
-
-		return telego.NewBot(token, telego.WithFastHTTPClient(&fasthttp.Client{
-			Dial: fasthttpproxy.FasthttpSocksDialer(proxyUrl),
-		}))
 	}
 
-	if !strings.HasPrefix(apiServerUrl, "http") {
-		logger.Warning("Invalid http(s) URL, using default")
-		return telego.NewBot(token)
+	// Create robust fasthttp client
+	client := t.createRobustFastHTTPClient(proxyUrl)
+
+	// Build bot options
+	var options []telego.BotOption
+	options = append(options, telego.WithFastHTTPClient(client))
+
+	if apiServerUrl != "" {
+		options = append(options, telego.WithAPIServer(apiServerUrl))
 	}
 
-	_, err := url.Parse(apiServerUrl)
-	if err != nil {
-		logger.Warningf("Can't parse API server URL, using default instance for tgbot: %v", err)
-		return telego.NewBot(token)
-	}
-
-	return telego.NewBot(token, telego.WithAPIServer(apiServerUrl))
+	return telego.NewBot(token, options...)
 }
 
 // IsRunning checks if the Telegram bot is currently running.
@@ -389,7 +427,7 @@ func (t *Tgbot) decodeQuery(query string) (string, error) {
 // OnReceive starts the message receiving loop for the Telegram bot.
 func (t *Tgbot) OnReceive() {
 	params := telego.GetUpdatesParams{
-		Timeout: 30, // Increased timeout to reduce API calls
+		Timeout: 20, // Reduced timeout to detect connection issues faster
 	}
 	// Strict singleton: never start a second long-polling loop.
 	tgBotMutex.Lock()
@@ -407,7 +445,7 @@ func (t *Tgbot) OnReceive() {
 	botWG.Add(1)
 	tgBotMutex.Unlock()
 
-	// Get updates channel using the context.
+	// Get updates channel using the context with shorter timeout for better error recovery
 	updates, _ := bot.UpdatesViaLongPolling(ctx, &params)
 	go func() {
 		defer botWG.Done()
@@ -2246,10 +2284,36 @@ func (t *Tgbot) SendMsgToTgbot(chatId int64, msg string, replyMarkup ...telego.R
 		if len(replyMarkup) > 0 && n == (len(allMessages)-1) {
 			params.ReplyMarkup = replyMarkup[0]
 		}
-		_, err := bot.SendMessage(context.Background(), &params)
-		if err != nil {
-			logger.Warning("Error sending telegram message :", err)
+
+		// Retry logic with exponential backoff for connection errors
+		maxRetries := 3
+		for attempt := range maxRetries {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_, err := bot.SendMessage(ctx, &params)
+			cancel()
+
+			if err == nil {
+				break // Success
+			}
+
+			// Check if error is a connection error
+			errStr := err.Error()
+			isConnectionError := strings.Contains(errStr, "connection") ||
+				strings.Contains(errStr, "timeout") ||
+				strings.Contains(errStr, "closed")
+
+			if isConnectionError && attempt < maxRetries-1 {
+				// Exponential backoff: 1s, 2s, 4s
+				backoff := time.Duration(1<<uint(attempt)) * time.Second
+				logger.Warningf("Connection error sending telegram message (attempt %d/%d), retrying in %v: %v",
+					attempt+1, maxRetries, backoff, err)
+				time.Sleep(backoff)
+			} else {
+				logger.Warning("Error sending telegram message:", err)
+				break
+			}
 		}
+
 		// Reduced delay to improve performance (only needed for rate limiting)
 		if n < len(allMessages)-1 { // Only delay between messages, not after the last one
 			time.Sleep(100 * time.Millisecond)
@@ -2267,6 +2331,8 @@ func (t *Tgbot) buildSubscriptionURLs(email string) (string, string, error) {
 	}
 
 	// Gather settings to construct absolute URLs
+	subURI, _ := t.settingService.GetSubURI()
+	subJsonURI, _ := t.settingService.GetSubJsonURI()
 	subDomain, _ := t.settingService.GetSubDomain()
 	subPort, _ := t.settingService.GetSubPort()
 	subPath, _ := t.settingService.GetSubPath()
@@ -2314,8 +2380,29 @@ func (t *Tgbot) buildSubscriptionURLs(email string) (string, string, error) {
 		subJsonPath = subJsonPath + "/"
 	}
 
-	subURL := fmt.Sprintf("%s://%s%s%s", scheme, host, subPath, client.SubID)
-	subJsonURL := fmt.Sprintf("%s://%s%s%s", scheme, host, subJsonPath, client.SubID)
+	var subURL string
+	var subJsonURL string
+
+	// If pre-configured URIs are available, use them directly
+	if subURI != "" {
+		if !strings.HasSuffix(subURI, "/") {
+			subURI = subURI + "/"
+		}
+		subURL = fmt.Sprintf("%s%s", subURI, client.SubID)
+	} else {
+		subURL = fmt.Sprintf("%s://%s%s%s", scheme, host, subPath, client.SubID)
+	}
+
+	if subJsonURI != "" {
+		if !strings.HasSuffix(subJsonURI, "/") {
+			subJsonURI = subJsonURI + "/"
+		}
+		subJsonURL = fmt.Sprintf("%s%s", subJsonURI, client.SubID)
+	} else {
+
+		subJsonURL = fmt.Sprintf("%s://%s%s%s", scheme, host, subJsonPath, client.SubID)
+	}
+
 	if !subJsonEnable {
 		subJsonURL = ""
 	}
@@ -2561,8 +2648,12 @@ func (t *Tgbot) SendBackupToAdmins() {
 	if !t.IsRunning() {
 		return
 	}
-	for _, adminId := range adminIds {
+	for i, adminId := range adminIds {
 		t.sendBackup(int64(adminId))
+		// Add delay between sends to avoid Telegram rate limits
+		if i < len(adminIds)-1 {
+			time.Sleep(1 * time.Second)
+		}
 	}
 }
 
@@ -3060,9 +3151,41 @@ func (t *Tgbot) searchClientIps(chatId int64, email string, messageID ...int) {
 		ips = t.I18nBot("tgbot.noIpRecord")
 	}
 
+	formattedIps := ips
+	if err == nil && len(ips) > 0 {
+		type ipWithTimestamp struct {
+			IP        string `json:"ip"`
+			Timestamp int64  `json:"timestamp"`
+		}
+
+		var ipsWithTime []ipWithTimestamp
+		if json.Unmarshal([]byte(ips), &ipsWithTime) == nil && len(ipsWithTime) > 0 {
+			lines := make([]string, 0, len(ipsWithTime))
+			for _, item := range ipsWithTime {
+				if item.IP == "" {
+					continue
+				}
+				if item.Timestamp > 0 {
+					ts := time.Unix(item.Timestamp, 0).Format("2006-01-02 15:04:05")
+					lines = append(lines, fmt.Sprintf("%s (%s)", item.IP, ts))
+					continue
+				}
+				lines = append(lines, item.IP)
+			}
+			if len(lines) > 0 {
+				formattedIps = strings.Join(lines, "\n")
+			}
+		} else {
+			var oldIps []string
+			if json.Unmarshal([]byte(ips), &oldIps) == nil && len(oldIps) > 0 {
+				formattedIps = strings.Join(oldIps, "\n")
+			}
+		}
+	}
+
 	output := ""
 	output += t.I18nBot("tgbot.messages.email", "Email=="+email)
-	output += t.I18nBot("tgbot.messages.ips", "IPs=="+ips)
+	output += t.I18nBot("tgbot.messages.ips", "IPs=="+formattedIps)
 	output += t.I18nBot("tgbot.messages.refreshedOn", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
 	inlineKeyboard := tu.InlineKeyboard(
@@ -3540,13 +3663,17 @@ func (t *Tgbot) sendBackup(chatId int64) {
 		logger.Error("Error in trigger a checkpoint operation: ", err)
 	}
 
+	// Send database backup
 	file, err := os.Open(config.GetDBPath())
 	if err == nil {
+		defer file.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		document := tu.Document(
 			tu.ID(chatId),
 			tu.File(file),
 		)
-		_, err = bot.SendDocument(context.Background(), document)
+		_, err = bot.SendDocument(ctx, document)
 		if err != nil {
 			logger.Error("Error in uploading backup: ", err)
 		}
@@ -3554,13 +3681,20 @@ func (t *Tgbot) sendBackup(chatId int64) {
 		logger.Error("Error in opening db file for backup: ", err)
 	}
 
+	// Small delay between file sends
+	time.Sleep(500 * time.Millisecond)
+
+	// Send config.json backup
 	file, err = os.Open(xray.GetConfigPath())
 	if err == nil {
+		defer file.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		document := tu.Document(
 			tu.ID(chatId),
 			tu.File(file),
 		)
-		_, err = bot.SendDocument(context.Background(), document)
+		_, err = bot.SendDocument(ctx, document)
 		if err != nil {
 			logger.Error("Error in uploading config.json: ", err)
 		}

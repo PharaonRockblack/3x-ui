@@ -374,6 +374,16 @@
 "subJsonEnable" = "تمكين/تعطيل نقطة نهاية اشتراك JSON بشكل مستقل."
 "subTitle" = "عنوان الاشتراك"
 "subTitleDesc" = "العنوان اللي هيظهر في عميل VPN"
+"subSupportUrl" = "رابط الدعم"
+"subSupportUrlDesc" = "رابط الدعم الفني المعروض في عميل VPN"
+"subProfileUrl" = "رابط الملف الشخصي"
+"subProfileUrlDesc" = "رابط لموقعك الإلكتروني يظهر في عميل VPN"
+"subAnnounce" = "إعلان"
+"subAnnounceDesc" = "نص الإعلان المعروض في عميل VPN"
+"subEnableRouting" = "تفعيل التوجيه"
+"subEnableRoutingDesc" = "إعداد عام لتمكين التوجيه (Routing) في عميل VPN. (فقط لـ Happ)"
+"subRoutingRules" = "قواعد التوجيه"
+"subRoutingRulesDesc" = "قواعد التوجيه العامة لعميل VPN. (فقط لـ Happ)"
 "subListen" = "IP الاستماع"
 "subListenDesc" = "عنوان IP لخدمة الاشتراك. (سيبه فاضي عشان يستمع على كل الـ IPs)"
 "subPort" = "بورت الاستماع"
@@ -450,6 +460,8 @@
 "FreedomStrategyDesc" = "اختار استراتيجية المخرجات للشبكة في بروتوكول الحرية."
 "RoutingStrategy" = "استراتيجية التوجيه العامة"
 "RoutingStrategyDesc" = "حدد استراتيجية التوجيه الإجمالية لحل كل الطلبات."
+"outboundTestUrl" = "رابط اختبار المخرج"
+"outboundTestUrlDesc" = "الرابط المستخدم عند اختبار اتصال المخرج"
 "Torrent" = "حظر بروتوكول التورنت"
 "Inbounds" = "الإدخالات"
 "InboundsDesc" = "قبول العملاء المعينين."
@@ -513,6 +525,12 @@
 "accountInfo" = "معلومات الحساب"
 "outboundStatus" = "حالة المخرج"
 "sendThrough" = "أرسل من خلال"
+"test" = "اختبار"
+"testResult" = "نتيجة الاختبار"
+"testing" = "جاري اختبار الاتصال..."
+"testSuccess" = "الاختبار ناجح"
+"testFailed" = "فشل الاختبار"
+"testError" = "فشل اختبار المخرج"
 
 [pages.xray.balancer]
 "addBalancer" = "أضف موازن تحميل"
@@ -530,6 +548,12 @@
 "endpoint" = "النهاية"
 "psk" = "المفتاح المشترك"
 "domainStrategy" = "استراتيجية الدومين"
+
+[pages.xray.tun]
+"nameDesc" = "اسم واجهة TUN. القيمة الافتراضية هي 'xray0'"
+"mtuDesc" = "وحدة النقل الأقصى. الحد الأقصى لحجم حزم البيانات. القيمة الافتراضية هي 1500"
+"userLevel" = "مستوى المستخدم"
+"userLevelDesc" = "ستستخدم جميع الاتصالات المُرسلة عبر هذا الإدخال مستوى المستخدم هذا. القيمة الافتراضية هي 0"
 
 [pages.xray.dns]
 "enable" = "فعل DNS"

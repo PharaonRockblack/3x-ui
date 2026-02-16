@@ -1,7 +1,7 @@
 # ========================================================
 # Stage: Builder
 # ========================================================
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 ARG TARGETARCH
 
@@ -30,7 +30,8 @@ RUN apk add --no-cache --update \
   tzdata \
   fail2ban \
   bash \
-  curl
+  curl \
+  openssl
 
 COPY --from=builder /app/build/ /app/
 COPY --from=builder /app/DockerEntrypoint.sh /app/

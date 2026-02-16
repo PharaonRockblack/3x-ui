@@ -374,6 +374,16 @@
 "subJsonEnable" = "JSON abonelik uç noktasını bağımsız olarak Etkinleştir/Devre Dışı bırak."
 "subTitle" = "Abonelik Başlığı"
 "subTitleDesc" = "VPN istemcisinde gösterilen başlık"
+"subSupportUrl" = "Destek URL'si"
+"subSupportUrlDesc" = "VPN istemcisinde gösterilen teknik destek bağlantısı"
+"subProfileUrl" = "Profil URL'si"
+"subProfileUrlDesc" = "VPN istemcisinde görüntülenen web sitenize giden bağlantı"
+"subAnnounce" = "Duyuru"
+"subAnnounceDesc" = "VPN istemcisinde görüntülenen duyuru metni"
+"subEnableRouting" = "Yönlendirmeyi etkinleştir"
+"subEnableRoutingDesc" = "VPN istemcisinde yönlendirmeyi etkinleştirmek için genel ayar. (Yalnızca Happ için)"
+"subRoutingRules" = "Yönlendirme kuralları"
+"subRoutingRulesDesc" = "VPN istemcisi için genel yönlendirme kuralları. (Yalnızca Happ için)"
 "subListen" = "Dinleme IP"
 "subListenDesc" = "Abonelik hizmeti için IP adresi. (tüm IP'leri dinlemek için boş bırakın)"
 "subPort" = "Dinleme Portu"
@@ -450,6 +460,8 @@
 "FreedomStrategyDesc" = "Freedom Protokolünde ağın çıkış stratejisini ayarlayın."
 "RoutingStrategy" = "Genel Yönlendirme Stratejisi"
 "RoutingStrategyDesc" = "Tüm istekleri çözmek için genel trafik yönlendirme stratejisini ayarlayın."
+"outboundTestUrl" = "Outbound test URL"
+"outboundTestUrlDesc" = "Outbound bağlantı testinde kullanılan URL"
 "Torrent" = "BitTorrent Protokolünü Engelle"
 "Inbounds" = "Gelenler"
 "InboundsDesc" = "Belirli müşterileri kabul eder."
@@ -513,6 +525,12 @@
 "accountInfo" = "Hesap Bilgileri"
 "outboundStatus" = "Giden Durumu"
 "sendThrough" = "Üzerinden Gönder"
+"test" = "Test"
+"testResult" = "Test Sonucu"
+"testing" = "Bağlantı test ediliyor..."
+"testSuccess" = "Test başarılı"
+"testFailed" = "Test başarısız"
+"testError" = "Giden test edilemedi"
 
 [pages.xray.balancer]
 "addBalancer" = "Dengeleyici Ekle"
@@ -530,6 +548,12 @@
 "endpoint" = "Uç Nokta"
 "psk" = "Ön Paylaşılan Anahtar"
 "domainStrategy" = "Alan Adı Stratejisi"
+
+[pages.xray.tun]
+"nameDesc" = "TUN arabiriminin adı. Varsayılan değer 'xray0'dir"
+"mtuDesc" = "Maksimum İletim Birimi. Veri paketlerinin maksimum boyutu. Varsayılan değer 1500'dür"
+"userLevel" = "Kullanıcı Seviyesi"
+"userLevelDesc" = "Bu giriş yoluyla yapılan tüm bağlantılar bu kullanıcı seviyesini kullanacaktır. Varsayılan değer 0'dır"
 
 [pages.xray.dns]
 "enable" = "DNS'yi Etkinleştir"

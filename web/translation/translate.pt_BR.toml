@@ -374,6 +374,16 @@
 "subJsonEnable" = "Ativar/Desativar o endpoint de assinatura JSON de forma independente."
 "subTitle" = "Título da Assinatura"
 "subTitleDesc" = "Título exibido no cliente VPN"
+"subSupportUrl" = "URL de Suporte"
+"subSupportUrlDesc" = "Link de suporte técnico exibido no cliente VPN"
+"subProfileUrl" = "URL de Perfil"
+"subProfileUrlDesc" = "Um link para o seu site exibido no cliente VPN"
+"subAnnounce" = "Anúncio"
+"subAnnounceDesc" = "O texto do anúncio exibido no cliente VPN"
+"subEnableRouting" = "Ativar roteamento"
+"subEnableRoutingDesc" = "Configuração global para habilitar o roteamento no cliente VPN. (Apenas para Happ)"
+"subRoutingRules" = "Regras de roteamento"
+"subRoutingRulesDesc" = "Regras de roteamento globais para o cliente VPN. (Apenas para Happ)"
 "subListen" = "IP de Escuta"
 "subListenDesc" = "O endereço IP para o serviço de assinatura. (deixe em branco para escutar em todos os IPs)"
 "subPort" = "Porta de Escuta"
@@ -450,6 +460,8 @@
 "FreedomStrategyDesc" = "Definir a estratégia de saída para a rede no Protocolo Freedom."
 "RoutingStrategy" = "Estratégia Geral de Roteamento"
 "RoutingStrategyDesc" = "Definir a estratégia geral de roteamento de tráfego para resolver todas as solicitações."
+"outboundTestUrl" = "URL de teste de outbound"
+"outboundTestUrlDesc" = "URL usada ao testar conectividade do outbound"
 "Torrent" = "Bloquear Protocolo BitTorrent"
 "Inbounds" = "Inbounds"
 "InboundsDesc" = "Aceitar clientes específicos."
@@ -513,6 +525,12 @@
 "accountInfo" = "Informações da Conta"
 "outboundStatus" = "Status de Saída"
 "sendThrough" = "Enviar Através de"
+"test" = "Testar"
+"testResult" = "Resultado do teste"
+"testing" = "Testando conexão..."
+"testSuccess" = "Teste bem-sucedido"
+"testFailed" = "Teste falhou"
+"testError" = "Falha ao testar saída"
 
 [pages.xray.balancer]
 "addBalancer" = "Adicionar Balanceador"
@@ -530,6 +548,12 @@
 "endpoint" = "Ponto Final"
 "psk" = "Chave Pré-Compartilhada"
 "domainStrategy" = "Estratégia de Domínio"
+
+[pages.xray.tun]
+"nameDesc" = "O nome da interface TUN. O padrão é 'xray0'"
+"mtuDesc" = "Unidade Máxima de Transmissão. O tamanho máximo dos pacotes de dados. O padrão é 1500"
+"userLevel" = "Nível do Usuário"
+"userLevelDesc" = "Todas as conexões feitas através deste inbound usarão este nível de usuário. O padrão é 0"
 
 [pages.xray.dns]
 "enable" = "Ativar DNS"

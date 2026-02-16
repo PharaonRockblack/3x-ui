@@ -374,6 +374,16 @@
 "subJsonEnable" = "獨立啟用/停用 JSON 訂閱端點。"
 "subTitle" = "訂閱標題"
 "subTitleDesc" = "在VPN客戶端中顯示的標題"
+"subSupportUrl" = "支援連結"
+"subSupportUrlDesc" = "VPN 用戶端中顯示的技術支援連結"
+"subProfileUrl" = "個人資料連結"
+"subProfileUrlDesc" = "VPN 用戶端中顯示的網站連結"
+"subAnnounce" = "公告"
+"subAnnounceDesc" = "VPN 用戶端中顯示的公告文字"
+"subEnableRouting" = "啟用路由"
+"subEnableRoutingDesc" = "在 VPN 用戶端中啟用路由的全域設定。（僅限 Happ）"
+"subRoutingRules" = "路由規則"
+"subRoutingRulesDesc" = "VPN 用戶端的全域路由規則。（僅限 Happ）"
 "subListen" = "監聽 IP"
 "subListenDesc" = "訂閱服務監聽的 IP 地址（留空表示監聽所有 IP）"
 "subPort" = "監聽埠"
@@ -450,6 +460,8 @@
 "FreedomStrategyDesc" = "設定 Freedom 協議中網路的輸出策略"
 "RoutingStrategy" = "配置路由域策略"
 "RoutingStrategyDesc" = "設定 DNS 解析的整體路由策略"
+"outboundTestUrl" = "出站測試 URL"
+"outboundTestUrlDesc" = "測試出站連線時使用的 URL"
 "Torrent" = "遮蔽 BitTorrent 協議"
 "Inbounds" = "入站規則"
 "InboundsDesc" = "接受來自特定客戶端的流量"
@@ -513,6 +525,12 @@
 "accountInfo" = "帳戶資訊"
 "outboundStatus" = "出站狀態"
 "sendThrough" = "傳送通過"
+"test" = "測試"
+"testResult" = "測試結果"
+"testing" = "正在測試連接..."
+"testSuccess" = "測試成功"
+"testFailed" = "測試失敗"
+"testError" = "測試出站失敗"
 
 [pages.xray.balancer]
 "addBalancer" = "新增負載均衡"
@@ -530,6 +548,12 @@
 "endpoint" = "端點"
 "psk" = "共享金鑰"
 "domainStrategy" = "域策略"
+
+[pages.xray.tun]
+"nameDesc" = "TUN 介面的名稱。預設值為 'xray0'"
+"mtuDesc" = "最大傳輸單元。資料包的最大大小。預設值為 1500"
+"userLevel" = "用戶級別"
+"userLevelDesc" = "通過此入站的所有連接都將使用此用戶級別。預設值為 0"
 
 [pages.xray.dns]
 "enable" = "啟用 DNS"
