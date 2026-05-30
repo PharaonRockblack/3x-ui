@@ -22,16 +22,16 @@ function LOGI() {
 # Port helpers: detect listener and owning process (best effort)
 is_port_in_use() {
     local port="$1"
-    if command -v ss >/dev/null 2>&1; then
-        ss -ltn 2>/dev/null | awk -v p=":${port}$" '$4 ~ p {exit 0} END {exit 1}'
+    if command -v ss > /dev/null 2>&1; then
+        ss -ltn 2> /dev/null | awk -v p=":${port}$" '$4 ~ p {exit 0} END {exit 1}'
         return
     fi
-    if command -v netstat >/dev/null 2>&1; then
-        netstat -lnt 2>/dev/null | awk -v p=":${port} " '$4 ~ p {exit 0} END {exit 1}'
+    if command -v netstat > /dev/null 2>&1; then
+        netstat -lnt 2> /dev/null | awk -v p=":${port} " '$4 ~ p {exit 0} END {exit 1}'
         return
     fi
-    if command -v lsof >/dev/null 2>&1; then
-        lsof -nP -iTCP:${port} -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    if command -v lsof > /dev/null 2>&1; then
+        lsof -nP -iTCP:${port} -sTCP:LISTEN > /dev/null 2>&1 && return 0
     fi
     return 1
 }
@@ -179,6 +179,20 @@ delete_script() {
     exit 1
 }
 
+xui_env_file_path() {
+    case "${release}" in
+        ubuntu | debian | armbian)
+            echo "/etc/default/x-ui"
+            ;;
+        arch | manjaro | parch | alpine)
+            echo "/etc/conf.d/x-ui"
+            ;;
+        *)
+            echo "/etc/sysconfig/x-ui"
+            ;;
+    esac
+}
+
 uninstall() {
     confirm "Are you sure you want to uninstall the panel? xray will also uninstalled!" "n"
     if [[ $? != 0 ]]; then
@@ -202,6 +216,7 @@ uninstall() {
 
     rm /etc/x-ui/ -rf
     rm ${xui_folder}/ -rf
+    rm -f "$(xui_env_file_path)"
 
     echo ""
     echo -e "Uninstalled Successfully.\n"
@@ -221,7 +236,7 @@ reset_user() {
         fi
         return 0
     fi
-    
+
     read -rp "Please set the login username [default is a random username]: " config_account
     [[ -z $config_account ]] && config_account=$(gen_random_string 10)
     read -rp "Please set the login password [default is a random password]: " config_password
@@ -229,12 +244,12 @@ reset_user() {
 
     read -rp "Do you want to disable currently configured two-factor authentication? (y/n): " twoFactorConfirm
     if [[ $twoFactorConfirm != "y" && $twoFactorConfirm != "Y" ]]; then
-        ${xui_folder}/x-ui setting -username "${config_account}" -password "${config_password}" -resetTwoFactor false >/dev/null 2>&1
+        ${xui_folder}/x-ui setting -username "${config_account}" -password "${config_password}" -resetTwoFactor false > /dev/null 2>&1
     else
-        ${xui_folder}/x-ui setting -username "${config_account}" -password "${config_password}" -resetTwoFactor true >/dev/null 2>&1
+        ${xui_folder}/x-ui setting -username "${config_account}" -password "${config_password}" -resetTwoFactor true > /dev/null 2>&1
         echo -e "Two factor authentication has been disabled."
     fi
-    
+
     echo -e "Panel login username has been reset to: ${green} ${config_account} ${plain}"
     echo -e "Panel login password has been reset to: ${green} ${config_password} ${plain}"
     echo -e "${green} Please use the new login username and password to access the X-UI panel. Also remember them! ${plain}"
@@ -243,7 +258,7 @@ reset_user() {
 
 gen_random_string() {
     local length="$1"
-    openssl rand -base64 $(( length * 2 )) \
+    openssl rand -base64 $((length * 2)) \
         | tr -dc 'a-zA-Z0-9' \
         | head -c "$length"
 }
@@ -260,7 +275,7 @@ reset_webbasepath() {
     config_webBasePath=$(gen_random_string 18)
 
     # Apply the new web base path setting
-    ${xui_folder}/x-ui setting -webBasePath "${config_webBasePath}" >/dev/null 2>&1
+    ${xui_folder}/x-ui setting -webBasePath "${config_webBasePath}" > /dev/null 2>&1
 
     echo -e "Web base path has been reset to: ${green}${config_webBasePath}${plain}"
     echo -e "${green}Please use the new web base path to access the panel.${plain}"
@@ -289,12 +304,50 @@ check_config() {
     fi
     LOGI "${info}"
 
+    local db_env_file
+    db_env_file="$(xui_env_file_path)"
+    if [[ -r "$db_env_file" ]] && grep -q '^XUI_DB_TYPE=postgres' "$db_env_file"; then
+        local dsn
+        dsn="$(grep -E '^XUI_DB_DSN=' "$db_env_file" | head -1 | cut -d= -f2-)"
+        local dsn_safe
+        dsn_safe="$(echo "$dsn" | sed -E 's|(://[^:/@]+:)[^@]+@|\1****@|')"
+        echo -e "${green}Database: PostgreSQL — ${dsn_safe}${plain}"
+    else
+        echo -e "${green}Database: SQLite (/etc/x-ui/x-ui.db)${plain}"
+    fi
+
     local existing_webBasePath=$(echo "$info" | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(echo "$info" | grep -Eo 'port: .+' | awk '{print $2}')
     local existing_cert=$(${xui_folder}/x-ui setting -getCert true | grep 'cert:' | awk -F': ' '{print $2}' | tr -d '[:space:]')
-    local server_ip=$(curl -s --max-time 3 https://api.ipify.org)
-    if [ -z "$server_ip" ]; then
-        server_ip=$(curl -s --max-time 3 https://4.ident.me)
+    local URL_lists=(
+        "https://api4.ipify.org"
+        "https://ipv4.icanhazip.com"
+        "https://v4.api.ipinfo.io/ip"
+        "https://ipv4.myexternalip.com/raw"
+        "https://4.ident.me"
+        "https://check-host.net/ip"
+    )
+    local server_ip=""
+    for ip_address in "${URL_lists[@]}"; do
+        local response=$(curl -s -w "\n%{http_code}" --max-time 3 "${ip_address}" 2> /dev/null)
+        local http_code=$(echo "$response" | tail -n1)
+        local ip_result=$(echo "$response" | head -n-1 | tr -d '[:space:]"')
+        if [[ "${http_code}" == "200" && "${ip_result}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            server_ip="${ip_result}"
+            break
+        fi
+    done
+
+    if [[ -z "$server_ip" ]]; then
+        echo -e "${yellow}Could not auto-detect server IP from any provider.${plain}"
+        while [[ -z "$server_ip" ]]; do
+            read -rp "Please enter your server's public IPv4 address: " server_ip
+            server_ip="${server_ip// /}"
+            if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo -e "${red}Invalid IPv4 address. Please try again.${plain}"
+                server_ip=""
+            fi
+        done
     fi
 
     if [[ -n "$existing_cert" ]]; then
@@ -310,16 +363,16 @@ check_config() {
         echo -e "${yellow}You can get a Let's Encrypt certificate for your IP address (valid ~6 days, auto-renews).${plain}"
         read -rp "Generate SSL certificate for IP now? [y/N]: " gen_ssl
         if [[ "$gen_ssl" == "y" || "$gen_ssl" == "Y" ]]; then
-            stop >/dev/null 2>&1
+            stop 0 > /dev/null 2>&1
             ssl_cert_issue_for_ip
             if [[ $? -eq 0 ]]; then
                 echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
                 # ssl_cert_issue_for_ip already restarts the panel, but ensure it's running
-                start >/dev/null 2>&1
+                start 0 > /dev/null 2>&1
             else
                 LOGE "IP certificate setup failed."
                 echo -e "${yellow}You can try again via option 19 (SSL Certificate Management).${plain}"
-                start >/dev/null 2>&1
+                start 0 > /dev/null 2>&1
             fi
         else
             echo -e "${yellow}Access URL: http://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
@@ -410,7 +463,11 @@ restart() {
 }
 
 restart_xray() {
-    systemctl reload x-ui
+    if [[ $release == "alpine" ]]; then
+        rc-service x-ui reload
+    else
+        systemctl reload x-ui
+    fi
     LOGI "xray-core Restart signal sent successfully, Please check the log information to confirm whether xray restarted successfully"
     sleep 2
     show_xray_status
@@ -471,19 +528,19 @@ show_log() {
         read -rp "Choose an option: " choice
 
         case "$choice" in
-        0)
-            show_menu
-            ;;
-        1)
-            grep -F 'x-ui[' /var/log/messages
-            if [[ $# == 0 ]]; then
-                before_show_menu
-            fi
-            ;;
-        *)
-            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-            show_log
-            ;;
+            0)
+                show_menu
+                ;;
+            1)
+                grep -F 'x-ui[' /var/log/messages
+                if [[ $# == 0 ]]; then
+                    before_show_menu
+                fi
+                ;;
+            *)
+                echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+                show_log
+                ;;
         esac
     else
         echo -e "${green}\t1.${plain} Debug Log"
@@ -492,25 +549,25 @@ show_log() {
         read -rp "Choose an option: " choice
 
         case "$choice" in
-        0)
-            show_menu
-            ;;
-        1)
-            journalctl -u x-ui -e --no-pager -f -p debug
-            if [[ $# == 0 ]]; then
-                before_show_menu
-            fi
-            ;;
-        2)
-            sudo journalctl --rotate
-            sudo journalctl --vacuum-time=1s
-            echo "All Logs cleared."
-            restart
-            ;;
-        *)
-            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-            show_log
-            ;;
+            0)
+                show_menu
+                ;;
+            1)
+                journalctl -u x-ui -e --no-pager -f -p debug
+                if [[ $# == 0 ]]; then
+                    before_show_menu
+                fi
+                ;;
+            2)
+                sudo journalctl --rotate
+                sudo journalctl --vacuum-time=1s
+                echo "All Logs cleared."
+                restart
+                ;;
+            *)
+                echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+                show_log
+                ;;
         esac
     fi
 }
@@ -521,21 +578,21 @@ bbr_menu() {
     echo -e "${green}\t0.${plain} Back to Main Menu"
     read -rp "Choose an option: " choice
     case "$choice" in
-    0)
-        show_menu
-        ;;
-    1)
-        enable_bbr
-        bbr_menu
-        ;;
-    2)
-        disable_bbr
-        bbr_menu
-        ;;
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        bbr_menu
-        ;;
+        0)
+            show_menu
+            ;;
+        1)
+            enable_bbr
+            bbr_menu
+            ;;
+        2)
+            disable_bbr
+            bbr_menu
+            ;;
+        *)
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            bbr_menu
+            ;;
     esac
 }
 
@@ -583,7 +640,7 @@ enable_bbr() {
         } > "/etc/sysctl.d/99-bbr-x-ui.conf"
         if [ -f "/etc/sysctl.conf" ]; then
             # Backup old settings from sysctl.conf, if any
-            sed -i 's/^net.core.default_qdisc/# &/'          /etc/sysctl.conf
+            sed -i 's/^net.core.default_qdisc/# &/' /etc/sysctl.conf
             sed -i 's/^net.ipv4.tcp_congestion_control/# &/' /etc/sysctl.conf
         fi
         sysctl --system
@@ -688,17 +745,17 @@ check_install() {
 show_status() {
     check_status
     case $? in
-    0)
-        echo -e "Panel state: ${green}Running${plain}"
-        show_enable_status
-        ;;
-    1)
-        echo -e "Panel state: ${yellow}Not Running${plain}"
-        show_enable_status
-        ;;
-    2)
-        echo -e "Panel state: ${red}Not Installed${plain}"
-        ;;
+        0)
+            echo -e "Panel state: ${green}Running${plain}"
+            show_enable_status
+            ;;
+        1)
+            echo -e "Panel state: ${yellow}Not Running${plain}"
+            show_enable_status
+            ;;
+        2)
+            echo -e "Panel state: ${red}Not Installed${plain}"
+            ;;
     esac
     show_xray_status
 }
@@ -741,46 +798,46 @@ firewall_menu() {
     echo -e "${green}\t0.${plain} Back to Main Menu"
     read -rp "Choose an option: " choice
     case "$choice" in
-    0)
-        show_menu
-        ;;
-    1)
-        install_firewall
-        firewall_menu
-        ;;
-    2)
-        ufw status numbered
-        firewall_menu
-        ;;
-    3)
-        open_ports
-        firewall_menu
-        ;;
-    4)
-        delete_ports
-        firewall_menu
-        ;;
-    5)
-        ufw enable
-        firewall_menu
-        ;;
-    6)
-        ufw disable
-        firewall_menu
-        ;;
-    7)
-        ufw status verbose
-        firewall_menu
-        ;;
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        firewall_menu
-        ;;
+        0)
+            show_menu
+            ;;
+        1)
+            install_firewall
+            firewall_menu
+            ;;
+        2)
+            ufw status numbered
+            firewall_menu
+            ;;
+        3)
+            open_ports
+            firewall_menu
+            ;;
+        4)
+            delete_ports
+            firewall_menu
+            ;;
+        5)
+            ufw enable
+            firewall_menu
+            ;;
+        6)
+            ufw disable
+            firewall_menu
+            ;;
+        7)
+            ufw status verbose
+            firewall_menu
+            ;;
+        *)
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            firewall_menu
+            ;;
     esac
 }
 
 install_firewall() {
-    if ! command -v ufw &>/dev/null; then
+    if ! command -v ufw &> /dev/null; then
         echo "ufw firewall is not installed. Installing now..."
         apt-get update
         apt-get install -y ufw
@@ -816,7 +873,7 @@ open_ports() {
     fi
 
     # Open the specified ports using ufw
-    IFS=',' read -ra PORT_LIST <<<"$ports"
+    IFS=',' read -ra PORT_LIST <<< "$ports"
     for port in "${PORT_LIST[@]}"; do
         if [[ $port == *-* ]]; then
             # Split the range into start and end ports
@@ -868,7 +925,7 @@ delete_ports() {
         fi
 
         # Split numbers into an array
-        IFS=',' read -ra RULE_NUMBERS <<<"$rule_numbers"
+        IFS=',' read -ra RULE_NUMBERS <<< "$rule_numbers"
         for rule_number in "${RULE_NUMBERS[@]}"; do
             # Delete the rule by number
             ufw delete "$rule_number" || echo "Failed to delete rule number $rule_number"
@@ -887,7 +944,7 @@ delete_ports() {
         fi
 
         # Split ports into an array
-        IFS=',' read -ra PORT_LIST <<<"$ports"
+        IFS=',' read -ra PORT_LIST <<< "$ports"
         for port in "${PORT_LIST[@]}"; do
             if [[ $port == *-* ]]; then
                 # Split the port range
@@ -929,9 +986,18 @@ update_all_geofiles() {
 
 update_geofiles() {
     case "${1}" in
-      "main") dat_files=(geoip geosite); dat_source="Loyalsoldier/v2ray-rules-dat";;
-        "IR") dat_files=(geoip_IR geosite_IR); dat_source="chocolate4u/Iran-v2ray-rules" ;;
-        "RU") dat_files=(geoip_RU geosite_RU); dat_source="runetfreedom/russia-v2ray-rules-dat";;
+        "main")
+            dat_files=(geoip geosite)
+            dat_source="Loyalsoldier/v2ray-rules-dat"
+            ;;
+        "IR")
+            dat_files=(geoip_IR geosite_IR)
+            dat_source="chocolate4u/Iran-v2ray-rules"
+            ;;
+        "RU")
+            dat_files=(geoip_RU geosite_RU)
+            dat_source="runetfreedom/russia-v2ray-rules-dat"
+            ;;
     esac
     for dat in "${dat_files[@]}"; do
         # Remove suffix for remote filename (e.g., geoip_IR -> geoip)
@@ -950,33 +1016,33 @@ update_geo() {
     read -rp "Choose an option: " choice
 
     case "$choice" in
-    0)
-        show_menu
-        ;;
-    1)
-        update_geofiles "main"
-        echo -e "${green}Loyalsoldier datasets have been updated successfully!${plain}"
-        restart
-        ;;
-    2)
-        update_geofiles "IR"
-        echo -e "${green}chocolate4u datasets have been updated successfully!${plain}"
-        restart
-        ;;
-    3)
-        update_geofiles "RU"
-        echo -e "${green}runetfreedom datasets have been updated successfully!${plain}"
-        restart
-        ;;
-    4)
-        update_all_geofiles
-        echo -e "${green}All geo files have been updated successfully!${plain}"
-        restart
-        ;;
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        update_geo
-        ;;
+        0)
+            show_menu
+            ;;
+        1)
+            update_geofiles "main"
+            echo -e "${green}Loyalsoldier datasets have been updated successfully!${plain}"
+            restart
+            ;;
+        2)
+            update_geofiles "IR"
+            echo -e "${green}chocolate4u datasets have been updated successfully!${plain}"
+            restart
+            ;;
+        3)
+            update_geofiles "RU"
+            echo -e "${green}runetfreedom datasets have been updated successfully!${plain}"
+            restart
+            ;;
+        4)
+            update_all_geofiles
+            echo -e "${green}All geo files have been updated successfully!${plain}"
+            restart
+            ;;
+        *)
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            update_geo
+            ;;
     esac
 
     before_show_menu
@@ -984,7 +1050,7 @@ update_geo() {
 
 install_acme() {
     # Check if acme.sh is already installed
-    if command -v ~/.acme.sh/acme.sh &>/dev/null; then
+    if command -v ~/.acme.sh/acme.sh &> /dev/null; then
         LOGI "acme.sh is already installed."
         return 0
     fi
@@ -1014,141 +1080,162 @@ ssl_cert_issue_main() {
 
     read -rp "Choose an option: " choice
     case "$choice" in
-    0)
-        show_menu
-        ;;
-    1)
-        ssl_cert_issue
-        ssl_cert_issue_main
-        ;;
-    2)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found to revoke."
-        else
-            echo "Existing domains:"
-            echo "$domains"
-            read -rp "Please enter a domain from the list to revoke the certificate: " domain
-            if echo "$domains" | grep -qw "$domain"; then
-                ~/.acme.sh/acme.sh --revoke -d ${domain}
-                LOGI "Certificate revoked for domain: $domain"
+        0)
+            show_menu
+            ;;
+        1)
+            ssl_cert_issue
+            ssl_cert_issue_main
+            ;;
+        2)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found to revoke."
             else
-                echo "Invalid domain entered."
-            fi
-        fi
-        ssl_cert_issue_main
-        ;;
-    3)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found to renew."
-        else
-            echo "Existing domains:"
-            echo "$domains"
-            read -rp "Please enter a domain from the list to renew the SSL certificate: " domain
-            if echo "$domains" | grep -qw "$domain"; then
-                ~/.acme.sh/acme.sh --renew -d ${domain} --force
-                LOGI "Certificate forcefully renewed for domain: $domain"
-            else
-                echo "Invalid domain entered."
-            fi
-        fi
-        ssl_cert_issue_main
-        ;;
-    4)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found."
-        else
-            echo "Existing domains and their paths:"
-            for domain in $domains; do
-                local cert_path="/root/cert/${domain}/fullchain.pem"
-                local key_path="/root/cert/${domain}/privkey.pem"
-                if [[ -f "${cert_path}" && -f "${key_path}" ]]; then
-                    echo -e "Domain: ${domain}"
-                    echo -e "\tCertificate Path: ${cert_path}"
-                    echo -e "\tPrivate Key Path: ${key_path}"
+                echo "Existing domains:"
+                echo "$domains"
+                read -rp "Please enter a domain from the list to revoke the certificate: " domain
+                if echo "$domains" | grep -qw "$domain"; then
+                    ~/.acme.sh/acme.sh --revoke -d ${domain}
+                    LOGI "Certificate revoked for domain: $domain"
                 else
-                    echo -e "Domain: ${domain} - Certificate or Key missing."
+                    echo "Invalid domain entered."
                 fi
-            done
-        fi
-        ssl_cert_issue_main
-        ;;
-    5)
-        local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-        if [ -z "$domains" ]; then
-            echo "No certificates found."
-        else
-            echo "Available domains:"
-            echo "$domains"
-            read -rp "Please choose a domain to set the panel paths: " domain
-
-            if echo "$domains" | grep -qw "$domain"; then
-                local webCertFile="/root/cert/${domain}/fullchain.pem"
-                local webKeyFile="/root/cert/${domain}/privkey.pem"
-
-                if [[ -f "${webCertFile}" && -f "${webKeyFile}" ]]; then
-                    ${xui_folder}/x-ui cert -webCert "$webCertFile" -webCertKey "$webKeyFile"
-                    echo "Panel paths set for domain: $domain"
-                    echo "  - Certificate File: $webCertFile"
-                    echo "  - Private Key File: $webKeyFile"
-                    restart
-                else
-                    echo "Certificate or private key not found for domain: $domain."
-                fi
-            else
-                echo "Invalid domain entered."
             fi
-        fi
-        ssl_cert_issue_main
-        ;;
-    6)
-        echo -e "${yellow}Let's Encrypt SSL Certificate for IP Address${plain}"
-        echo -e "This will obtain a certificate for your server's IP using the shortlived profile."
-        echo -e "${yellow}Certificate valid for ~6 days, auto-renews via acme.sh cron job.${plain}"
-        echo -e "${yellow}Port 80 must be open and accessible from the internet.${plain}"
-        confirm "Do you want to proceed?" "y"
-        if [[ $? == 0 ]]; then
-            ssl_cert_issue_for_ip
-        fi
-        ssl_cert_issue_main
-        ;;
+            ssl_cert_issue_main
+            ;;
+        3)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found to renew."
+            else
+                echo "Existing domains:"
+                echo "$domains"
+                read -rp "Please enter a domain from the list to renew the SSL certificate: " domain
+                if echo "$domains" | grep -qw "$domain"; then
+                    ~/.acme.sh/acme.sh --renew -d ${domain} --force
+                    LOGI "Certificate forcefully renewed for domain: $domain"
+                else
+                    echo "Invalid domain entered."
+                fi
+            fi
+            ssl_cert_issue_main
+            ;;
+        4)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found."
+            else
+                echo "Existing domains and their paths:"
+                for domain in $domains; do
+                    local cert_path="/root/cert/${domain}/fullchain.pem"
+                    local key_path="/root/cert/${domain}/privkey.pem"
+                    if [[ -f "${cert_path}" && -f "${key_path}" ]]; then
+                        echo -e "Domain: ${domain}"
+                        echo -e "\tCertificate Path: ${cert_path}"
+                        echo -e "\tPrivate Key Path: ${key_path}"
+                    else
+                        echo -e "Domain: ${domain} - Certificate or Key missing."
+                    fi
+                done
+            fi
+            ssl_cert_issue_main
+            ;;
+        5)
+            local domains=$(find /root/cert/ -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
+            if [ -z "$domains" ]; then
+                echo "No certificates found."
+            else
+                echo "Available domains:"
+                echo "$domains"
+                read -rp "Please choose a domain to set the panel paths: " domain
 
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        ssl_cert_issue_main
-        ;;
+                if echo "$domains" | grep -qw "$domain"; then
+                    local webCertFile="/root/cert/${domain}/fullchain.pem"
+                    local webKeyFile="/root/cert/${domain}/privkey.pem"
+
+                    if [[ -f "${webCertFile}" && -f "${webKeyFile}" ]]; then
+                        ${xui_folder}/x-ui cert -webCert "$webCertFile" -webCertKey "$webKeyFile"
+                        echo "Panel paths set for domain: $domain"
+                        echo "  - Certificate File: $webCertFile"
+                        echo "  - Private Key File: $webKeyFile"
+                        restart
+                    else
+                        echo "Certificate or private key not found for domain: $domain."
+                    fi
+                else
+                    echo "Invalid domain entered."
+                fi
+            fi
+            ssl_cert_issue_main
+            ;;
+        6)
+            echo -e "${yellow}Let's Encrypt SSL Certificate for IP Address${plain}"
+            echo -e "This will obtain a certificate for your server's IP using the shortlived profile."
+            echo -e "${yellow}Certificate valid for ~6 days, auto-renews via acme.sh cron job.${plain}"
+            echo -e "${yellow}Port 80 must be open and accessible from the internet.${plain}"
+            confirm "Do you want to proceed?" "y"
+            if [[ $? == 0 ]]; then
+                ssl_cert_issue_for_ip
+            fi
+            ssl_cert_issue_main
+            ;;
+
+        *)
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            ssl_cert_issue_main
+            ;;
     esac
 }
 
 ssl_cert_issue_for_ip() {
     LOGI "Starting automatic SSL certificate generation for server IP..."
     LOGI "Using Let's Encrypt shortlived profile (~6 days validity, auto-renews)"
-    
+
     local existing_webBasePath=$(${xui_folder}/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(${xui_folder}/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
-    
+
     # Get server IP
-    local server_ip=$(curl -s --max-time 3 https://api.ipify.org)
-    if [ -z "$server_ip" ]; then
-        server_ip=$(curl -s --max-time 3 https://4.ident.me)
+    local URL_lists=(
+        "https://api4.ipify.org"
+        "https://ipv4.icanhazip.com"
+        "https://v4.api.ipinfo.io/ip"
+        "https://ipv4.myexternalip.com/raw"
+        "https://4.ident.me"
+        "https://check-host.net/ip"
+    )
+    local server_ip=""
+    for ip_address in "${URL_lists[@]}"; do
+        local response=$(curl -s -w "\n%{http_code}" --max-time 3 "${ip_address}" 2> /dev/null)
+        local http_code=$(echo "$response" | tail -n1)
+        local ip_result=$(echo "$response" | head -n-1 | tr -d '[:space:]"')
+        if [[ "${http_code}" == "200" && "${ip_result}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            server_ip="${ip_result}"
+            break
+        fi
+    done
+
+    if [[ -z "$server_ip" ]]; then
+        LOGI "Could not auto-detect server IP from any provider."
+        while [[ -z "$server_ip" ]]; do
+            read -rp "Please enter your server's public IPv4 address: " server_ip
+            server_ip="${server_ip// /}"
+            if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                LOGE "Invalid IPv4 address. Please try again."
+                server_ip=""
+            fi
+        done
     fi
-    
-    if [ -z "$server_ip" ]; then
-        LOGE "Failed to get server IP address"
-        return 1
-    fi
-    
+
     LOGI "Server IP detected: ${server_ip}"
-    
+
     # Ask for optional IPv6
     local ipv6_addr=""
     read -rp "Do you have an IPv6 address to include? (leave empty to skip): " ipv6_addr
-    ipv6_addr="${ipv6_addr// /}"  # Trim whitespace
-    
+    ipv6_addr="${ipv6_addr// /}" # Trim whitespace
+
     # check for acme.sh first
-    if ! command -v ~/.acme.sh/acme.sh &>/dev/null; then
+    if ! command -v ~/.acme.sh/acme.sh &> /dev/null; then
         LOGI "acme.sh not found, installing..."
         install_acme
         if [ $? -ne 0 ]; then
@@ -1156,47 +1243,47 @@ ssl_cert_issue_for_ip() {
             return 1
         fi
     fi
-    
+
     # install socat
     case "${release}" in
-    ubuntu | debian | armbian)
-        apt-get update >/dev/null 2>&1 && apt-get install socat -y >/dev/null 2>&1
-        ;;
-    fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
-        dnf -y update >/dev/null 2>&1 && dnf -y install socat >/dev/null 2>&1
-        ;;
-    centos)
-        if [[ "${VERSION_ID}" =~ ^7 ]]; then
-            yum -y update >/dev/null 2>&1 && yum -y install socat >/dev/null 2>&1
-        else
-            dnf -y update >/dev/null 2>&1 && dnf -y install socat >/dev/null 2>&1
-        fi
-        ;;
-    arch | manjaro | parch)
-        pacman -Sy --noconfirm socat >/dev/null 2>&1
-        ;;
-    opensuse-tumbleweed | opensuse-leap)
-        zypper refresh >/dev/null 2>&1 && zypper -q install -y socat >/dev/null 2>&1
-        ;;
-    alpine)
-        apk add socat curl openssl >/dev/null 2>&1
-        ;;
-    *)
-        LOGW "Unsupported OS for automatic socat installation"
-        ;;
+        ubuntu | debian | armbian)
+            apt-get update > /dev/null 2>&1 && apt-get install socat -y > /dev/null 2>&1
+            ;;
+        fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
+            dnf -y update > /dev/null 2>&1 && dnf -y install socat > /dev/null 2>&1
+            ;;
+        centos)
+            if [[ "${VERSION_ID}" =~ ^7 ]]; then
+                yum -y update > /dev/null 2>&1 && yum -y install socat > /dev/null 2>&1
+            else
+                dnf -y update > /dev/null 2>&1 && dnf -y install socat > /dev/null 2>&1
+            fi
+            ;;
+        arch | manjaro | parch)
+            pacman -Sy --noconfirm socat > /dev/null 2>&1
+            ;;
+        opensuse-tumbleweed | opensuse-leap)
+            zypper refresh > /dev/null 2>&1 && zypper -q install -y socat > /dev/null 2>&1
+            ;;
+        alpine)
+            apk add socat curl openssl > /dev/null 2>&1
+            ;;
+        *)
+            LOGW "Unsupported OS for automatic socat installation"
+            ;;
     esac
-    
+
     # Create certificate directory
     certPath="/root/cert/ip"
     mkdir -p "$certPath"
-    
+
     # Build domain arguments
     local domain_args="-d ${server_ip}"
     if [[ -n "$ipv6_addr" ]] && is_ipv6 "$ipv6_addr"; then
         domain_args="${domain_args} -d ${ipv6_addr}"
         LOGI "Including IPv6 address: ${ipv6_addr}"
     fi
-    
+
     # Choose port for HTTP-01 listener (default 80, allow override)
     local WebPort=""
     read -rp "Port to use for ACME HTTP-01 listener (default 80): " WebPort
@@ -1232,10 +1319,10 @@ ssl_cert_issue_for_ip() {
             break
         fi
     done
-    
+
     # Reload command - restarts panel after renewal
     local reloadCmd="systemctl restart x-ui 2>/dev/null || rc-service x-ui restart 2>/dev/null"
-    
+
     # issue the certificate for IP with shortlived profile
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
     ~/.acme.sh/acme.sh --issue \
@@ -1246,19 +1333,19 @@ ssl_cert_issue_for_ip() {
         --days 6 \
         --httpport ${WebPort} \
         --force
-    
+
     if [ $? -ne 0 ]; then
         LOGE "Failed to issue certificate for IP: ${server_ip}"
         LOGE "Make sure port ${WebPort} is open and the server is accessible from the internet"
         # Cleanup acme.sh data for both IPv4 and IPv6 if specified
-        rm -rf ~/.acme.sh/${server_ip} 2>/dev/null
-        [[ -n "$ipv6_addr" ]] && rm -rf ~/.acme.sh/${ipv6_addr} 2>/dev/null
-        rm -rf ${certPath} 2>/dev/null
+        rm -rf ~/.acme.sh/${server_ip} 2> /dev/null
+        [[ -n "$ipv6_addr" ]] && rm -rf ~/.acme.sh/${ipv6_addr} 2> /dev/null
+        rm -rf ${certPath} 2> /dev/null
         return 1
     else
         LOGI "Certificate issued successfully for IP: ${server_ip}"
     fi
-    
+
     # Install the certificate
     # Note: acme.sh may report "Reload error" and exit non-zero if reloadcmd fails,
     # but the cert files are still installed. We check for files instead of exit code.
@@ -1266,49 +1353,55 @@ ssl_cert_issue_for_ip() {
         --key-file "${certPath}/privkey.pem" \
         --fullchain-file "${certPath}/fullchain.pem" \
         --reloadcmd "${reloadCmd}" 2>&1 || true
-    
+
     # Verify certificate files exist (don't rely on exit code - reloadcmd failure causes non-zero)
     if [[ ! -f "${certPath}/fullchain.pem" || ! -f "${certPath}/privkey.pem" ]]; then
         LOGE "Certificate files not found after installation"
         # Cleanup acme.sh data for both IPv4 and IPv6 if specified
-        rm -rf ~/.acme.sh/${server_ip} 2>/dev/null
-        [[ -n "$ipv6_addr" ]] && rm -rf ~/.acme.sh/${ipv6_addr} 2>/dev/null
-        rm -rf ${certPath} 2>/dev/null
+        rm -rf ~/.acme.sh/${server_ip} 2> /dev/null
+        [[ -n "$ipv6_addr" ]] && rm -rf ~/.acme.sh/${ipv6_addr} 2> /dev/null
+        rm -rf ${certPath} 2> /dev/null
         return 1
     fi
-    
+
     LOGI "Certificate files installed successfully"
-    
+
     # enable auto-renew
-    ~/.acme.sh/acme.sh --upgrade --auto-upgrade >/dev/null 2>&1
-    chmod 600 $certPath/privkey.pem 2>/dev/null
-    chmod 644 $certPath/fullchain.pem 2>/dev/null
-    
-    # Set certificate paths for the panel
+    ~/.acme.sh/acme.sh --upgrade --auto-upgrade > /dev/null 2>&1
+    chmod 600 $certPath/privkey.pem 2> /dev/null
+    chmod 644 $certPath/fullchain.pem 2> /dev/null
+
+    # Prompt user to set panel paths after successful certificate installation
     local webCertFile="${certPath}/fullchain.pem"
     local webKeyFile="${certPath}/privkey.pem"
-    
-    if [[ -f "$webCertFile" && -f "$webKeyFile" ]]; then
-        ${xui_folder}/x-ui cert -webCert "$webCertFile" -webCertKey "$webKeyFile"
-        LOGI "Certificate configured for panel"
-        LOGI "  - Certificate File: $webCertFile"
-        LOGI "  - Private Key File: $webKeyFile"
-        LOGI "  - Validity: ~6 days (auto-renews via acme.sh cron)"
-        echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
-        LOGI "Panel will restart to apply SSL certificate..."
-        restart
-        return 0
+
+    read -rp "Would you like to set this certificate for the panel? (y/n): " setPanel
+    if [[ "$setPanel" == "y" || "$setPanel" == "Y" ]]; then
+        if [[ -f "$webCertFile" && -f "$webKeyFile" ]]; then
+            ${xui_folder}/x-ui cert -webCert "$webCertFile" -webCertKey "$webKeyFile"
+            LOGI "Panel paths set for IP: $server_ip"
+            LOGI "  - Certificate File: $webCertFile"
+            LOGI "  - Private Key File: $webKeyFile"
+            LOGI "  - Validity: ~6 days (auto-renews via acme.sh cron)"
+            echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
+            LOGI "Panel will restart to apply SSL certificate..."
+            restart
+        else
+            LOGE "Error: Certificate or private key file not found for IP: $server_ip."
+            return 1
+        fi
     else
-        LOGE "Certificate files not found after installation"
-        return 1
+        LOGI "Skipping panel path setting."
     fi
+
+    return 0
 }
 
 ssl_cert_issue() {
     local existing_webBasePath=$(${xui_folder}/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(${xui_folder}/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
     # check for acme.sh first
-    if ! command -v ~/.acme.sh/acme.sh &>/dev/null; then
+    if ! command -v ~/.acme.sh/acme.sh &> /dev/null; then
         echo "acme.sh could not be found. we will install it"
         install_acme
         if [ $? -ne 0 ]; then
@@ -1319,31 +1412,31 @@ ssl_cert_issue() {
 
     # install socat
     case "${release}" in
-    ubuntu | debian | armbian)
-        apt-get update >/dev/null 2>&1 && apt-get install socat -y >/dev/null 2>&1
-        ;;
-    fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
-        dnf -y update >/dev/null 2>&1 && dnf -y install socat >/dev/null 2>&1
-        ;;
-    centos)
-        if [[ "${VERSION_ID}" =~ ^7 ]]; then
-            yum -y update >/dev/null 2>&1 && yum -y install socat >/dev/null 2>&1
-        else
-            dnf -y update >/dev/null 2>&1 && dnf -y install socat >/dev/null 2>&1
-        fi
-        ;;
-    arch | manjaro | parch)
-        pacman -Sy --noconfirm socat >/dev/null 2>&1
-        ;;
-    opensuse-tumbleweed | opensuse-leap)
-        zypper refresh >/dev/null 2>&1 && zypper -q install -y socat >/dev/null 2>&1
-        ;;
-    alpine)
-        apk add socat curl openssl >/dev/null 2>&1
-        ;;
-    *)
-        LOGW "Unsupported OS for automatic socat installation"
-        ;;
+        ubuntu | debian | armbian)
+            apt-get update > /dev/null 2>&1 && apt-get install socat -y > /dev/null 2>&1
+            ;;
+        fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
+            dnf -y update > /dev/null 2>&1 && dnf -y install socat > /dev/null 2>&1
+            ;;
+        centos)
+            if [[ "${VERSION_ID}" =~ ^7 ]]; then
+                yum -y update > /dev/null 2>&1 && yum -y install socat > /dev/null 2>&1
+            else
+                dnf -y update > /dev/null 2>&1 && dnf -y install socat > /dev/null 2>&1
+            fi
+            ;;
+        arch | manjaro | parch)
+            pacman -Sy --noconfirm socat > /dev/null 2>&1
+            ;;
+        opensuse-tumbleweed | opensuse-leap)
+            zypper refresh > /dev/null 2>&1 && zypper -q install -y socat > /dev/null 2>&1
+            ;;
+        alpine)
+            apk add socat curl openssl > /dev/null 2>&1
+            ;;
+        *)
+            LOGW "Unsupported OS for automatic socat installation"
+            ;;
     esac
     if [ $? -ne 0 ]; then
         LOGE "install socat failed, please check logs"
@@ -1356,29 +1449,30 @@ ssl_cert_issue() {
     local domain=""
     while true; do
         read -rp "Please enter your domain name: " domain
-        domain="${domain// /}"  # Trim whitespace
-        
+        domain="${domain// /}" # Trim whitespace
+
         if [[ -z "$domain" ]]; then
             LOGE "Domain name cannot be empty. Please try again."
             continue
         fi
-        
+
         if ! is_domain "$domain"; then
             LOGE "Invalid domain format: ${domain}. Please enter a valid domain name."
             continue
         fi
-        
+
         break
     done
     LOGD "Your domain is: ${domain}, checking it..."
+    SSL_ISSUED_DOMAIN="${domain}"
 
-    # check if there already exists a certificate
-    local currentCert=$(~/.acme.sh/acme.sh --list | tail -1 | awk '{print $1}')
-    if [ "${currentCert}" == "${domain}" ]; then
-        local certInfo=$(~/.acme.sh/acme.sh --list)
-        LOGE "System already has certificates for this domain. Cannot issue again. Current certificate details:"
-        LOGI "$certInfo"
-        exit 1
+    # detect existing certificate and reuse it if present
+    local cert_exists=0
+    if ~/.acme.sh/acme.sh --list 2> /dev/null | awk '{print $1}' | grep -Fxq "${domain}"; then
+        cert_exists=1
+        local certInfo=$(~/.acme.sh/acme.sh --list 2> /dev/null | grep -F "${domain}")
+        LOGI "Existing certificate found for ${domain}, will reuse it."
+        [[ -n "${certInfo}" ]] && LOGI "${certInfo}"
     else
         LOGI "Your domain is ready for issuing certificates now..."
     fi
@@ -1401,15 +1495,19 @@ ssl_cert_issue() {
     fi
     LOGI "Will use port: ${WebPort} to issue certificates. Please make sure this port is open."
 
-    # issue the certificate
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
-    ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --force
-    if [ $? -ne 0 ]; then
-        LOGE "Issuing certificate failed, please check logs."
-        rm -rf ~/.acme.sh/${domain}
-        exit 1
+    if [[ ${cert_exists} -eq 0 ]]; then
+        # issue the certificate
+        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
+        ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --force
+        if [ $? -ne 0 ]; then
+            LOGE "Issuing certificate failed, please check logs."
+            rm -rf ~/.acme.sh/${domain}
+            exit 1
+        else
+            LOGE "Issuing certificate succeeded, installing certificates..."
+        fi
     else
-        LOGE "Issuing certificate succeeded, installing certificates..."
+        LOGI "Using existing certificate, installing certificates..."
     fi
 
     reloadCmd="x-ui restart"
@@ -1423,32 +1521,42 @@ ssl_cert_issue() {
         echo -e "${green}\t0.${plain} Keep default reloadcmd"
         read -rp "Choose an option: " choice
         case "$choice" in
-        1)
-            LOGI "Reloadcmd is: systemctl reload nginx ; x-ui restart"
-            reloadCmd="systemctl reload nginx ; x-ui restart"
-            ;;
-        2)  
-            LOGD "It's recommended to put x-ui restart at the end, so it won't raise an error if other services fails"
-            read -rp "Please enter your reloadcmd (example: systemctl reload nginx ; x-ui restart): " reloadCmd
-            LOGI "Your reloadcmd is: ${reloadCmd}"
-            ;;
-        *)
-            LOGI "Keep default reloadcmd"
-            ;;
+            1)
+                LOGI "Reloadcmd is: systemctl reload nginx ; x-ui restart"
+                reloadCmd="systemctl reload nginx ; x-ui restart"
+                ;;
+            2)
+                LOGD "It's recommended to put x-ui restart at the end, so it won't raise an error if other services fails"
+                read -rp "Please enter your reloadcmd (example: systemctl reload nginx ; x-ui restart): " reloadCmd
+                LOGI "Your reloadcmd is: ${reloadCmd}"
+                ;;
+            *)
+                LOGI "Keep default reloadcmd"
+                ;;
         esac
     fi
 
     # install the certificate
-    ~/.acme.sh/acme.sh --installcert -d ${domain} \
+    local installOutput=""
+    installOutput=$(~/.acme.sh/acme.sh --installcert -d ${domain} \
         --key-file /root/cert/${domain}/privkey.pem \
-        --fullchain-file /root/cert/${domain}/fullchain.pem --reloadcmd "${reloadCmd}"
+        --fullchain-file /root/cert/${domain}/fullchain.pem --reloadcmd "${reloadCmd}" 2>&1)
+    local installRc=$?
+    echo "${installOutput}"
 
-    if [ $? -ne 0 ]; then
-        LOGE "Installing certificate failed, exiting."
-        rm -rf ~/.acme.sh/${domain}
-        exit 1
-    else
+    local installWroteFiles=0
+    if echo "${installOutput}" | grep -q "Installing key to:" && echo "${installOutput}" | grep -q "Installing full chain to:"; then
+        installWroteFiles=1
+    fi
+
+    if [[ -f "/root/cert/${domain}/privkey.pem" && -f "/root/cert/${domain}/fullchain.pem" && (${installRc} -eq 0 || ${installWroteFiles} -eq 1) ]]; then
         LOGI "Installing certificate succeeded, enabling auto renew..."
+    else
+        LOGE "Installing certificate failed, exiting."
+        if [[ ${cert_exists} -eq 0 ]]; then
+            rm -rf ~/.acme.sh/${domain}
+        fi
+        exit 1
     fi
 
     # enable auto-renew
@@ -1502,7 +1610,7 @@ ssl_cert_issue_CF() {
 
     if [ $? -eq 0 ]; then
         # Check for acme.sh first
-        if ! command -v ~/.acme.sh/acme.sh &>/dev/null; then
+        if ! command -v ~/.acme.sh/acme.sh &> /dev/null; then
             echo "acme.sh could not be found. We will install it."
             install_acme
             if [ $? -ne 0 ]; then
@@ -1547,7 +1655,7 @@ ssl_cert_issue_CF() {
             LOGI "Certificate issued successfully, Installing..."
         fi
 
-         # Install the certificate
+        # Install the certificate
         certPath="/root/cert/${CF_Domain}"
         if [ -d "$certPath" ]; then
             rm -rf ${certPath}
@@ -1570,24 +1678,24 @@ ssl_cert_issue_CF() {
             echo -e "${green}\t0.${plain} Keep default reloadcmd"
             read -rp "Choose an option: " choice
             case "$choice" in
-            1)
-                LOGI "Reloadcmd is: systemctl reload nginx ; x-ui restart"
-                reloadCmd="systemctl reload nginx ; x-ui restart"
-                ;;
-            2)  
-                LOGD "It's recommended to put x-ui restart at the end, so it won't raise an error if other services fails"
-                read -rp "Please enter your reloadcmd (example: systemctl reload nginx ; x-ui restart): " reloadCmd
-                LOGI "Your reloadcmd is: ${reloadCmd}"
-                ;;
-            *)
-                LOGI "Keep default reloadcmd"
-                ;;
+                1)
+                    LOGI "Reloadcmd is: systemctl reload nginx ; x-ui restart"
+                    reloadCmd="systemctl reload nginx ; x-ui restart"
+                    ;;
+                2)
+                    LOGD "It's recommended to put x-ui restart at the end, so it won't raise an error if other services fails"
+                    read -rp "Please enter your reloadcmd (example: systemctl reload nginx ; x-ui restart): " reloadCmd
+                    LOGI "Your reloadcmd is: ${reloadCmd}"
+                    ;;
+                *)
+                    LOGI "Keep default reloadcmd"
+                    ;;
             esac
         fi
         ~/.acme.sh/acme.sh --installcert -d ${CF_Domain} -d *.${CF_Domain} \
             --key-file ${certPath}/privkey.pem \
             --fullchain-file ${certPath}/fullchain.pem --reloadcmd "${reloadCmd}"
-        
+
         if [ $? -ne 0 ]; then
             LOGE "Certificate installation failed, script exiting..."
             exit 1
@@ -1633,9 +1741,9 @@ ssl_cert_issue_CF() {
 
 run_speedtest() {
     # Check if Speedtest is already installed
-    if ! command -v speedtest &>/dev/null; then
+    if ! command -v speedtest &> /dev/null; then
         # If not installed, determine installation method
-        if command -v snap &>/dev/null; then
+        if command -v snap &> /dev/null; then
             # Use snap to install Speedtest
             echo "Installing Speedtest using snap..."
             snap install speedtest
@@ -1644,16 +1752,16 @@ run_speedtest() {
             local pkg_manager=""
             local speedtest_install_script=""
 
-            if command -v dnf &>/dev/null; then
+            if command -v dnf &> /dev/null; then
                 pkg_manager="dnf"
                 speedtest_install_script="https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.rpm.sh"
-            elif command -v yum &>/dev/null; then
+            elif command -v yum &> /dev/null; then
                 pkg_manager="yum"
                 speedtest_install_script="https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.rpm.sh"
-            elif command -v apt-get &>/dev/null; then
+            elif command -v apt-get &> /dev/null; then
                 pkg_manager="apt-get"
                 speedtest_install_script="https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh"
-            elif command -v apt &>/dev/null; then
+            elif command -v apt &> /dev/null; then
                 pkg_manager="apt"
                 speedtest_install_script="https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh"
             fi
@@ -1671,8 +1779,6 @@ run_speedtest() {
 
     speedtest
 }
-
-
 
 ip_validation() {
     ipv6_regex="^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$"
@@ -1693,144 +1799,151 @@ iplimit_main() {
     echo -e "${green}\t0.${plain} Back to Main Menu"
     read -rp "Choose an option: " choice
     case "$choice" in
-    0)
-        show_menu
-        ;;
-    1)
-        confirm "Proceed with installation of Fail2ban & IP Limit?" "y"
-        if [[ $? == 0 ]]; then
-            install_iplimit
-        else
+        0)
+            show_menu
+            ;;
+        1)
+            confirm "Proceed with installation of Fail2ban & IP Limit?" "y"
+            if [[ $? == 0 ]]; then
+                install_iplimit
+            else
+                iplimit_main
+            fi
+            ;;
+        2)
+            read -rp "Please enter new Ban Duration in Minutes [default 30]: " NUM
+            if [[ $NUM =~ ^[0-9]+$ ]]; then
+                create_iplimit_jails ${NUM}
+                if [[ $release == "alpine" ]]; then
+                    rc-service fail2ban restart
+                else
+                    systemctl restart fail2ban
+                fi
+            else
+                echo -e "${red}${NUM} is not a number! Please, try again.${plain}"
+            fi
             iplimit_main
-        fi
-        ;;
-    2)
-        read -rp "Please enter new Ban Duration in Minutes [default 30]: " NUM
-        if [[ $NUM =~ ^[0-9]+$ ]]; then
-            create_iplimit_jails ${NUM}
+            ;;
+        3)
+            confirm "Proceed with Unbanning everyone from IP Limit jail?" "y"
+            if [[ $? == 0 ]]; then
+                fail2ban-client reload --restart --unban 3x-ipl
+                truncate -s 0 "${iplimit_banned_log_path}"
+                echo -e "${green}All users Unbanned successfully.${plain}"
+                iplimit_main
+            else
+                echo -e "${yellow}Cancelled.${plain}"
+            fi
+            iplimit_main
+            ;;
+        4)
+            show_banlog
+            iplimit_main
+            ;;
+        5)
+            read -rp "Enter the IP address you want to ban: " ban_ip
+            ip_validation
+            if [[ $ban_ip =~ $ipv4_regex || $ban_ip =~ $ipv6_regex ]]; then
+                fail2ban-client set 3x-ipl banip "$ban_ip"
+                echo -e "${green}IP Address ${ban_ip} has been banned successfully.${plain}"
+            else
+                echo -e "${red}Invalid IP address format! Please try again.${plain}"
+            fi
+            iplimit_main
+            ;;
+        6)
+            read -rp "Enter the IP address you want to unban: " unban_ip
+            ip_validation
+            if [[ $unban_ip =~ $ipv4_regex || $unban_ip =~ $ipv6_regex ]]; then
+                fail2ban-client set 3x-ipl unbanip "$unban_ip"
+                echo -e "${green}IP Address ${unban_ip} has been unbanned successfully.${plain}"
+            else
+                echo -e "${red}Invalid IP address format! Please try again.${plain}"
+            fi
+            iplimit_main
+            ;;
+        7)
+            tail -f /var/log/fail2ban.log
+            iplimit_main
+            ;;
+        8)
+            service fail2ban status
+            iplimit_main
+            ;;
+        9)
             if [[ $release == "alpine" ]]; then
                 rc-service fail2ban restart
             else
                 systemctl restart fail2ban
             fi
-        else
-            echo -e "${red}${NUM} is not a number! Please, try again.${plain}"
-        fi
-        iplimit_main
-        ;;
-    3)
-        confirm "Proceed with Unbanning everyone from IP Limit jail?" "y"
-        if [[ $? == 0 ]]; then
-            fail2ban-client reload --restart --unban 3x-ipl
-            truncate -s 0 "${iplimit_banned_log_path}"
-            echo -e "${green}All users Unbanned successfully.${plain}"
             iplimit_main
-        else
-            echo -e "${yellow}Cancelled.${plain}"
-        fi
-        iplimit_main
-        ;;
-    4)
-        show_banlog
-        iplimit_main
-        ;;
-    5)
-        read -rp "Enter the IP address you want to ban: " ban_ip
-        ip_validation
-        if [[ $ban_ip =~ $ipv4_regex || $ban_ip =~ $ipv6_regex ]]; then
-            fail2ban-client set 3x-ipl banip "$ban_ip"
-            echo -e "${green}IP Address ${ban_ip} has been banned successfully.${plain}"
-        else
-            echo -e "${red}Invalid IP address format! Please try again.${plain}"
-        fi
-        iplimit_main
-        ;;
-    6)
-        read -rp "Enter the IP address you want to unban: " unban_ip
-        ip_validation
-        if [[ $unban_ip =~ $ipv4_regex || $unban_ip =~ $ipv6_regex ]]; then
-            fail2ban-client set 3x-ipl unbanip "$unban_ip"
-            echo -e "${green}IP Address ${unban_ip} has been unbanned successfully.${plain}"
-        else
-            echo -e "${red}Invalid IP address format! Please try again.${plain}"
-        fi
-        iplimit_main
-        ;;
-    7)
-        tail -f /var/log/fail2ban.log
-        iplimit_main
-        ;;
-    8)
-        service fail2ban status
-        iplimit_main
-        ;;
-    9)
-        if [[ $release == "alpine" ]]; then
-            rc-service fail2ban restart
-        else
-            systemctl restart fail2ban
-        fi
-        iplimit_main
-        ;;
-    10)
-        remove_iplimit
-        iplimit_main
-        ;;
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        iplimit_main
-        ;;
+            ;;
+        10)
+            remove_iplimit
+            iplimit_main
+            ;;
+        *)
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            iplimit_main
+            ;;
     esac
 }
 
 install_iplimit() {
-    if ! command -v fail2ban-client &>/dev/null; then
+    if ! command -v fail2ban-client &> /dev/null; then
         echo -e "${green}Fail2ban is not installed. Installing now...!${plain}\n"
 
-        # Check the OS and install necessary packages
+        # Install fail2ban together with nftables. Recent fail2ban packages
+        # default to `banaction = nftables-multiport` in /etc/fail2ban/jail.conf,
+        # but the `nftables` package isn't pulled in as a dependency on most
+        # minimal server images (Debian 12+, Ubuntu 24+, fresh RHEL-family).
+        # Without `nft` in PATH the default sshd jail fails to ban with
+        #   stderr: '/bin/sh: 1: nft: not found'
+        # even though our own 3x-ipl jail uses iptables. Bundling the binary
+        # at install time prevents that confusing log spam for new installs.
         case "${release}" in
-        ubuntu)
-            apt-get update
-            if [[ "${os_version}" -ge 24 ]]; then
-                apt-get install python3-pip -y
-                python3 -m pip install pyasynchat --break-system-packages
-            fi
-            apt-get install fail2ban -y
-            ;;
-        debian)
-            apt-get update
-            if [ "$os_version" -ge 12 ]; then
-                apt-get install -y python3-systemd
-            fi
-            apt-get install -y fail2ban
-            ;;
-        armbian)
-            apt-get update && apt-get install fail2ban -y
-            ;;
-        fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
-            dnf -y update && dnf -y install fail2ban
-            ;;
-        centos)
-            if [[ "${VERSION_ID}" =~ ^7 ]]; then
-                yum update -y && yum install epel-release -y
-                yum -y install fail2ban
-            else
-                dnf -y update && dnf -y install fail2ban
-            fi
-            ;;
-        arch | manjaro | parch)
-            pacman -Syu --noconfirm fail2ban
-            ;;
-        alpine)
-            apk add fail2ban
-            ;;
-        *)
-            echo -e "${red}Unsupported operating system. Please check the script and install the necessary packages manually.${plain}\n"
-            exit 1
-            ;;
+            ubuntu)
+                apt-get update
+                if [[ "${os_version}" -ge 24 ]]; then
+                    apt-get install python3-pip -y
+                    python3 -m pip install pyasynchat --break-system-packages
+                fi
+                apt-get install fail2ban nftables -y
+                ;;
+            debian)
+                apt-get update
+                if [ "$os_version" -ge 12 ]; then
+                    apt-get install -y python3-systemd
+                fi
+                apt-get install -y fail2ban nftables
+                ;;
+            armbian)
+                apt-get update && apt-get install fail2ban nftables -y
+                ;;
+            fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
+                dnf -y update && dnf -y install fail2ban nftables
+                ;;
+            centos)
+                if [[ "${VERSION_ID}" =~ ^7 ]]; then
+                    yum update -y && yum install epel-release -y
+                    yum -y install fail2ban nftables
+                else
+                    dnf -y update && dnf -y install fail2ban nftables
+                fi
+                ;;
+            arch | manjaro | parch)
+                pacman -Syu --noconfirm fail2ban nftables
+                ;;
+            alpine)
+                apk add fail2ban nftables
+                ;;
+            *)
+                echo -e "${red}Unsupported operating system. Please check the script and install the necessary packages manually.${plain}\n"
+                exit 1
+                ;;
         esac
 
-        if ! command -v fail2ban-client &>/dev/null; then
+        if ! command -v fail2ban-client &> /dev/null; then
             echo -e "${red}Fail2ban installation failed.${plain}\n"
             exit 1
         fi
@@ -1886,65 +1999,65 @@ remove_iplimit() {
     echo -e "${green}\t0.${plain} Back to Main Menu"
     read -rp "Choose an option: " num
     case "$num" in
-    1)
-        rm -f /etc/fail2ban/filter.d/3x-ipl.conf
-        rm -f /etc/fail2ban/action.d/3x-ipl.conf
-        rm -f /etc/fail2ban/jail.d/3x-ipl.conf
-        if [[ $release == "alpine" ]]; then
-            rc-service fail2ban restart
-        else
-            systemctl restart fail2ban
-        fi
-        echo -e "${green}IP Limit removed successfully!${plain}\n"
-        before_show_menu
-        ;;
-    2)
-        rm -rf /etc/fail2ban
-        if [[ $release == "alpine" ]]; then
-            rc-service fail2ban stop
-        else
-            systemctl stop fail2ban
-        fi
-        case "${release}" in
-        ubuntu | debian | armbian)
-            apt-get remove -y fail2ban
-            apt-get purge -y fail2ban -y
-            apt-get autoremove -y
-            ;;
-        fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
-            dnf remove fail2ban -y
-            dnf autoremove -y
-            ;;
-        centos)
-            if [[ "${VERSION_ID}" =~ ^7 ]]; then    
-                yum remove fail2ban -y
-                yum autoremove -y
+        1)
+            rm -f /etc/fail2ban/filter.d/3x-ipl.conf
+            rm -f /etc/fail2ban/action.d/3x-ipl.conf
+            rm -f /etc/fail2ban/jail.d/3x-ipl.conf
+            if [[ $release == "alpine" ]]; then
+                rc-service fail2ban restart
             else
-                dnf remove fail2ban -y
-                dnf autoremove -y
+                systemctl restart fail2ban
             fi
+            echo -e "${green}IP Limit removed successfully!${plain}\n"
+            before_show_menu
             ;;
-        arch | manjaro | parch)
-            pacman -Rns --noconfirm fail2ban
+        2)
+            rm -rf /etc/fail2ban
+            if [[ $release == "alpine" ]]; then
+                rc-service fail2ban stop
+            else
+                systemctl stop fail2ban
+            fi
+            case "${release}" in
+                ubuntu | debian | armbian)
+                    apt-get remove -y fail2ban
+                    apt-get purge -y fail2ban -y
+                    apt-get autoremove -y
+                    ;;
+                fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
+                    dnf remove fail2ban -y
+                    dnf autoremove -y
+                    ;;
+                centos)
+                    if [[ "${VERSION_ID}" =~ ^7 ]]; then
+                        yum remove fail2ban -y
+                        yum autoremove -y
+                    else
+                        dnf remove fail2ban -y
+                        dnf autoremove -y
+                    fi
+                    ;;
+                arch | manjaro | parch)
+                    pacman -Rns --noconfirm fail2ban
+                    ;;
+                alpine)
+                    apk del fail2ban
+                    ;;
+                *)
+                    echo -e "${red}Unsupported operating system. Please uninstall Fail2ban manually.${plain}\n"
+                    exit 1
+                    ;;
+            esac
+            echo -e "${green}Fail2ban and IP Limit removed successfully!${plain}\n"
+            before_show_menu
             ;;
-        alpine)
-            apk del fail2ban
+        0)
+            show_menu
             ;;
         *)
-            echo -e "${red}Unsupported operating system. Please uninstall Fail2ban manually.${plain}\n"
-            exit 1
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            remove_iplimit
             ;;
-        esac
-        echo -e "${green}Fail2ban and IP Limit removed successfully!${plain}\n"
-        before_show_menu
-        ;;
-    0)
-        show_menu
-        ;;
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        remove_iplimit
-        ;;
     esac
 }
 
@@ -1994,7 +2107,7 @@ create_iplimit_jails() {
     sed -i 's/#allowipv6 = auto/allowipv6 = auto/g' /etc/fail2ban/fail2ban.conf
 
     # On Debian 12+ fail2ban's default backend should be changed to systemd
-    if [[  "${release}" == "debian" && ${os_version} -ge 12 ]]; then
+    if [[ "${release}" == "debian" && ${os_version} -ge 12 ]]; then
         sed -i '0,/action =/s/backend = auto/backend = systemd/' /etc/fail2ban/jail.conf
     fi
 
@@ -2005,7 +2118,7 @@ backend=auto
 filter=3x-ipl
 action=3x-ipl
 logpath=${iplimit_log_path}
-maxretry=2
+maxretry=1
 findtime=32
 bantime=${bantime}m
 EOF
@@ -2065,22 +2178,34 @@ iplimit_remove_conflicts() {
 SSH_port_forwarding() {
     local URL_lists=(
         "https://api4.ipify.org"
-		"https://ipv4.icanhazip.com"
-		"https://v4.api.ipinfo.io/ip"
-		"https://ipv4.myexternalip.com/raw"
-		"https://4.ident.me"
-		"https://check-host.net/ip"
+        "https://ipv4.icanhazip.com"
+        "https://v4.api.ipinfo.io/ip"
+        "https://ipv4.myexternalip.com/raw"
+        "https://4.ident.me"
+        "https://check-host.net/ip"
     )
     local server_ip=""
     for ip_address in "${URL_lists[@]}"; do
-        local response=$(curl -s -w "\n%{http_code}" --max-time 3 "${ip_address}" 2>/dev/null)
+        local response=$(curl -s -w "\n%{http_code}" --max-time 3 "${ip_address}" 2> /dev/null)
         local http_code=$(echo "$response" | tail -n1)
-        local ip_result=$(echo "$response" | head -n-1 | tr -d '[:space:]')
-        if [[ "${http_code}" == "200" && -n "${ip_result}" ]]; then
+        local ip_result=$(echo "$response" | head -n-1 | tr -d '[:space:]"')
+        if [[ "${http_code}" == "200" && "${ip_result}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             server_ip="${ip_result}"
             break
         fi
     done
+
+    if [[ -z "$server_ip" ]]; then
+        echo -e "${yellow}Could not auto-detect server IP from any provider.${plain}"
+        while [[ -z "$server_ip" ]]; do
+            read -rp "Please enter your server's public IPv4 address: " server_ip
+            server_ip="${server_ip// /}"
+            if [[ ! "$server_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo -e "${red}Invalid IPv4 address. Please try again.${plain}"
+                server_ip=""
+            fi
+        done
+    fi
 
     local existing_webBasePath=$(${xui_folder}/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(${xui_folder}/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
@@ -2117,43 +2242,43 @@ SSH_port_forwarding() {
     read -rp "Choose an option: " num
 
     case "$num" in
-    1)
-        if [[ -z "$existing_listenIP" || "$existing_listenIP" == "0.0.0.0" ]]; then
-            echo -e "\nNo listenIP configured. Choose an option:"
-            echo -e "1. Use default IP (127.0.0.1)"
-            echo -e "2. Set a custom IP"
-            read -rp "Select an option (1 or 2): " listen_choice
+        1)
+            if [[ -z "$existing_listenIP" || "$existing_listenIP" == "0.0.0.0" ]]; then
+                echo -e "\nNo listenIP configured. Choose an option:"
+                echo -e "1. Use default IP (127.0.0.1)"
+                echo -e "2. Set a custom IP"
+                read -rp "Select an option (1 or 2): " listen_choice
 
-            config_listenIP="127.0.0.1"
-            [[ "$listen_choice" == "2" ]] && read -rp "Enter custom IP to listen on: " config_listenIP
+                config_listenIP="127.0.0.1"
+                [[ "$listen_choice" == "2" ]] && read -rp "Enter custom IP to listen on: " config_listenIP
 
-            ${xui_folder}/x-ui setting -listenIP "${config_listenIP}" >/dev/null 2>&1
-            echo -e "${green}listen IP has been set to ${config_listenIP}.${plain}"
-            echo -e "\n${green}SSH Port Forwarding Configuration:${plain}"
-            echo -e "Standard SSH command:"
-            echo -e "${yellow}ssh -L 2222:${config_listenIP}:${existing_port} root@${server_ip}${plain}"
-            echo -e "\nIf using SSH key:"
-            echo -e "${yellow}ssh -i <sshkeypath> -L 2222:${config_listenIP}:${existing_port} root@${server_ip}${plain}"
-            echo -e "\nAfter connecting, access the panel at:"
-            echo -e "${yellow}http://localhost:2222${existing_webBasePath}${plain}"
+                ${xui_folder}/x-ui setting -listenIP "${config_listenIP}" > /dev/null 2>&1
+                echo -e "${green}listen IP has been set to ${config_listenIP}.${plain}"
+                echo -e "\n${green}SSH Port Forwarding Configuration:${plain}"
+                echo -e "Standard SSH command:"
+                echo -e "${yellow}ssh -L 2222:${config_listenIP}:${existing_port} root@${server_ip}${plain}"
+                echo -e "\nIf using SSH key:"
+                echo -e "${yellow}ssh -i <sshkeypath> -L 2222:${config_listenIP}:${existing_port} root@${server_ip}${plain}"
+                echo -e "\nAfter connecting, access the panel at:"
+                echo -e "${yellow}http://localhost:2222${existing_webBasePath}${plain}"
+                restart
+            else
+                config_listenIP="${existing_listenIP}"
+                echo -e "${green}Current listen IP is already set to ${config_listenIP}.${plain}"
+            fi
+            ;;
+        2)
+            ${xui_folder}/x-ui setting -listenIP 0.0.0.0 > /dev/null 2>&1
+            echo -e "${green}Listen IP has been cleared.${plain}"
             restart
-        else
-            config_listenIP="${existing_listenIP}"
-            echo -e "${green}Current listen IP is already set to ${config_listenIP}.${plain}"
-        fi
-        ;;
-    2)
-        ${xui_folder}/x-ui setting -listenIP 0.0.0.0 >/dev/null 2>&1
-        echo -e "${green}Listen IP has been cleared.${plain}"
-        restart
-        ;;
-    0)
-        show_menu
-        ;;
-    *)
-        echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
-        SSH_port_forwarding
-        ;;
+            ;;
+        0)
+            show_menu
+            ;;
+        *)
+            echo -e "${red}Invalid option. Please select a valid number.${plain}\n"
+            SSH_port_forwarding
+            ;;
     esac
 }
 
@@ -2223,141 +2348,141 @@ show_menu() {
     echo && read -rp "Please enter your selection [0-26]: " num
 
     case "${num}" in
-    0)
-        exit 0
-        ;;
-    1)
-        check_uninstall && install
-        ;;
-    2)
-        check_install && update
-        ;;
-    3)
-        check_install && update_menu
-        ;;
-    4)
-        check_install && legacy_version
-        ;;
-    5)
-        check_install && uninstall
-        ;;
-    6)
-        check_install && reset_user
-        ;;
-    7)
-        check_install && reset_webbasepath
-        ;;
-    8)
-        check_install && reset_config
-        ;;
-    9)
-        check_install && set_port
-        ;;
-    10)
-        check_install && check_config
-        ;;
-    11)
-        check_install && start
-        ;;
-    12)
-        check_install && stop
-        ;;
-    13)
-        check_install && restart
-        ;;
-    14)
-        check_install && restart_xray
-        ;;
-    15)
-        check_install && status
-        ;;
-    16)
-        check_install && show_log
-        ;;
-    17)
-        check_install && enable
-        ;;
-    18)
-        check_install && disable
-        ;;
-    19)
-        ssl_cert_issue_main
-        ;;
-    20)
-        ssl_cert_issue_CF
-        ;;
-    21)
-        iplimit_main
-        ;;
-    22)
-        firewall_menu
-        ;;
-    23)
-        SSH_port_forwarding
-        ;;
-    24)
-        bbr_menu
-        ;;
-    25)
-        update_geo
-        ;;
-    26)
-        run_speedtest
-        ;;
-    *)
-        LOGE "Please enter the correct number [0-26]"
-        ;;
+        0)
+            exit 0
+            ;;
+        1)
+            check_uninstall && install
+            ;;
+        2)
+            check_install && update
+            ;;
+        3)
+            check_install && update_menu
+            ;;
+        4)
+            check_install && legacy_version
+            ;;
+        5)
+            check_install && uninstall
+            ;;
+        6)
+            check_install && reset_user
+            ;;
+        7)
+            check_install && reset_webbasepath
+            ;;
+        8)
+            check_install && reset_config
+            ;;
+        9)
+            check_install && set_port
+            ;;
+        10)
+            check_install && check_config
+            ;;
+        11)
+            check_install && start
+            ;;
+        12)
+            check_install && stop
+            ;;
+        13)
+            check_install && restart
+            ;;
+        14)
+            check_install && restart_xray
+            ;;
+        15)
+            check_install && status
+            ;;
+        16)
+            check_install && show_log
+            ;;
+        17)
+            check_install && enable
+            ;;
+        18)
+            check_install && disable
+            ;;
+        19)
+            ssl_cert_issue_main
+            ;;
+        20)
+            ssl_cert_issue_CF
+            ;;
+        21)
+            iplimit_main
+            ;;
+        22)
+            firewall_menu
+            ;;
+        23)
+            SSH_port_forwarding
+            ;;
+        24)
+            bbr_menu
+            ;;
+        25)
+            update_geo
+            ;;
+        26)
+            run_speedtest
+            ;;
+        *)
+            LOGE "Please enter the correct number [0-26]"
+            ;;
     esac
 }
 
 if [[ $# > 0 ]]; then
     case $1 in
-    "start")
-        check_install 0 && start 0
-        ;;
-    "stop")
-        check_install 0 && stop 0
-        ;;
-    "restart")
-        check_install 0 && restart 0
-        ;;
-    "restart-xray")
-        check_install 0 && restart_xray 0
-        ;;
-    "status")
-        check_install 0 && status 0
-        ;;
-    "settings")
-        check_install 0 && check_config 0
-        ;;
-    "enable")
-        check_install 0 && enable 0
-        ;;
-    "disable")
-        check_install 0 && disable 0
-        ;;
-    "log")
-        check_install 0 && show_log 0
-        ;;
-    "banlog")
-        check_install 0 && show_banlog 0
-        ;;
-    "update")
-        check_install 0 && update 0
-        ;;
-    "legacy")
-        check_install 0 && legacy_version 0
-        ;;
-    "install")
-        check_uninstall 0 && install 0
-        ;;
-    "uninstall")
-        check_install 0 && uninstall 0
-        ;;
-    "update-all-geofiles")
-        check_install 0 && update_all_geofiles 0 && restart 0
-        ;;
-    *) show_usage ;;
+        "start")
+            check_install 0 && start 0
+            ;;
+        "stop")
+            check_install 0 && stop 0
+            ;;
+        "restart")
+            check_install 0 && restart 0
+            ;;
+        "restart-xray")
+            check_install 0 && restart_xray 0
+            ;;
+        "status")
+            check_install 0 && status 0
+            ;;
+        "settings")
+            check_install 0 && check_config 0
+            ;;
+        "enable")
+            check_install 0 && enable 0
+            ;;
+        "disable")
+            check_install 0 && disable 0
+            ;;
+        "log")
+            check_install 0 && show_log 0
+            ;;
+        "banlog")
+            check_install 0 && show_banlog 0
+            ;;
+        "update")
+            check_install 0 && update 0
+            ;;
+        "legacy")
+            check_install 0 && legacy_version 0
+            ;;
+        "install")
+            check_uninstall 0 && install 0
+            ;;
+        "uninstall")
+            check_install 0 && uninstall 0
+            ;;
+        "update-all-geofiles")
+            check_install 0 && update_all_geofiles 0 && restart 0
+            ;;
+        *) show_usage ;;
     esac
 else
     show_menu

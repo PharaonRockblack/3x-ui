@@ -1,7 +1,7 @@
 package job
 
 import (
-	"github.com/mhsanaei/3x-ui/v2/web/service"
+	"github.com/mhsanaei/3x-ui/v3/web/service"
 )
 
 // CheckHashStorageJob periodically cleans up expired hash entries from the Telegram bot's hash storage.
@@ -16,6 +16,9 @@ func NewCheckHashStorageJob() *CheckHashStorageJob {
 
 // Run removes expired hash entries from the Telegram bot's hash storage.
 func (j *CheckHashStorageJob) Run() {
-	// Remove expired hashes from storage
-	j.tgbotService.GetHashStorage().RemoveExpiredHashes()
+	storage := j.tgbotService.GetHashStorage()
+	if storage == nil {
+		return
+	}
+	storage.RemoveExpiredHashes()
 }

@@ -1,8 +1,8 @@
 package job
 
 import (
-	"github.com/mhsanaei/3x-ui/v2/logger"
-	"github.com/mhsanaei/3x-ui/v2/web/service"
+	"github.com/mhsanaei/3x-ui/v3/logger"
+	"github.com/mhsanaei/3x-ui/v3/web/service"
 )
 
 // Period represents the time period for traffic resets.
@@ -11,6 +11,7 @@ type Period string
 // PeriodicTrafficResetJob resets traffic statistics for inbounds based on their configured reset period.
 type PeriodicTrafficResetJob struct {
 	inboundService service.InboundService
+	clientService  service.ClientService
 	period         Period
 }
 
@@ -37,12 +38,12 @@ func (j *PeriodicTrafficResetJob) Run() {
 	resetCount := 0
 
 	for _, inbound := range inbounds {
-		resetInboundErr := j.inboundService.ResetAllTraffics()
+		resetInboundErr := j.inboundService.ResetInboundTraffic(inbound.Id)
 		if resetInboundErr != nil {
 			logger.Warning("Failed to reset traffic for inbound", inbound.Id, ":", resetInboundErr)
 		}
 
-		resetClientErr := j.inboundService.ResetAllClientTraffics(inbound.Id)
+		resetClientErr := j.clientService.ResetAllClientTraffics(&j.inboundService, inbound.Id)
 		if resetClientErr != nil {
 			logger.Warning("Failed to reset traffic for all users of inbound", inbound.Id, ":", resetClientErr)
 		}
